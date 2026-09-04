@@ -9,10 +9,10 @@
           "description": "启用插件",
           "default": true
         },
-        "default_kb_path": {
+        "default_kw_path": {
           "type": "string",
-          "description": "默认知识库根目录（绝对路径，Obsidian vault 目录）",
-          "default": ""
+          "description": "默认知识库根目录（支持相对 KiraAI 根目录的相对路径，如 data/kw）",
+          "default": "data/kw"
         }
       }
     },
