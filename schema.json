@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "properties": {
+    "section_basic": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "启用插件",
+          "default": true
+        },
+        "default_kb_path": {
+          "type": "string",
+          "description": "默认知识库根目录（绝对路径，Obsidian vault 目录）",
+          "default": ""
+        }
+      }
+    },
+    "section_llm": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "用于生成 wiki 页面的模型，留空用默认 LLM",
+          "default": ""
+        },
+        "max_pages_per_ingest": {
+          "type": "integer",
+          "description": "单次 ingest 最多生成的页面数",
+          "default": 15
+        }
+      }
+    }
+  }
+}
