@@ -1,8 +1,8 @@
-# 📚 Kira Wiki
+# 📚 KiraAI_kira_wiki_plugin
 
 > 让 AI 帮你把零碎素材编译成一本会自己长出来的知识库
 
-Kira Wiki 是 [KiraAI](https://github.com/xxynet/KiraAI) 框架的插件，灵感来自 Karpathy 的 [LLM Wiki](https://github.com/karpathy/llm-wiki) 思路：**LLM 就是编译器，Obsidian 就是 IDE**。
+KiraAI_kira_wiki_plugin 是 [KiraAI](https://github.com/xxynet/KiraAI) 框架的插件，灵感来自 Karpathy 的 [LLM Wiki 思路](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)：**LLM 就是编译器，Obsidian 就是 IDE**。
 
 你只管把素材（文章、笔记、聊天记录、随手抄的东西）丢进去，AI 会自动帮你整理成结构化的 wiki 页面，还带互相引用的双链，用 Obsidian 打开就是一张知识图谱。
 
@@ -23,7 +23,7 @@ Kira Wiki 是 [KiraAI](https://github.com/xxynet/KiraAI) 框架的插件，灵�
 一个知识库（Obsidian vault）长这样：
 
 ```
-my-kb/
+data/kw/                  # 默认知识库（可在配置里改路径）
 ├── raw/                  # 素材区（你丢东西进来，LLM 只读）
 │   └── assets/
 └── wiki/                 # AI 生成区（LLM 自动维护）
@@ -40,9 +40,9 @@ my-kb/
 ## 🚀 快速开始
 
 1. 把插件目录放进 KiraAI 的 `data/plugins/` 下，重启或热重载
-2. 对 bot 说：**「建个知识库，路径 C:\xxx\my-kb」**（会调用 `wiki_init`）
+2. 对 bot 说：**「建个知识库，路径 C:\xxx\my-kw」**（会调用 `wiki_init`）
 3. 丢素材：**「把这段话收进知识库：……」**（会调用 `wiki_ingest`）
-4. 用 Obsidian 打开 `my-kb` 目录，看图谱、看双链，完事
+4. 用 Obsidian 打开知识库目录，看图谱、看双链，完事
 
 > 没装 Obsidian？纯文本编辑器也能看，只是没有图谱和双链跳转。
 
@@ -52,7 +52,7 @@ my-kb/
 
 - **section_basic**
   - `enabled`：开关，默认开
-  - `default_kb_path`：默认知识库路径，不填的话每次要指定 kb_name
+  - `default_kw_path`：默认知识库路径，默认 `data/kw`（相对 KiraAI 根目录），不填的话每次要指定 kw_name
 - **section_llm**
   - `model`：生成 wiki 页用的模型，留空用 KiraAI 默认 LLM
   - `max_pages_per_ingest`：单次收录最多生成的页面数，默认 15
@@ -71,7 +71,7 @@ LLM 生成失败也不慌，素材已经躺在 `raw/` 里了，不会丢。
 
 ## 📜 License
 
-MIT，随便玩，记得给个 star 就行（不是）
+AGPL-3.0，随便玩，记得给个 star 就行（不是）
 
 ---
 
