@@ -1,0 +1,15 @@
+{
+  "plugin_id": "kira-wiki",
+  "display_name": "Kira Wiki",
+  "version": "1.0.0",
+  "author": "ainali",
+  "description": "基于 Karpathy LLM Wiki 理念的 Obsidian 知识库管理插件：raw 素材收录 + LLM 自动生成 wiki 页面、实体、概念与交叉引用",
+  "core_version": ">=2.33.1",
+  "tags": ["knowledge", "wiki", "obsidian"],
+  "locales": {
+    "zh": {
+      "display_name": "Kira Wiki",
+      "description": "基于 Karpathy LLM Wiki 理念的 Obsidian 知识库管理插件"
+    }
+  }
+}
