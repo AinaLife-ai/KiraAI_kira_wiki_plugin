@@ -1,3 +1,24 @@
+"""Kira Wiki - Obsidian knowledge base manager based on Karpathy's LLM Wiki idea.
+
+The LLM acts as the compiler: user sources material into raw/, the LLM
+summarizes, cross-references, files and maintains wiki/ pages. Obsidian is
+the IDE, the wiki is the codebase.
+
+Structure:
+    <kw>/
+      raw/            # user-written source material (LLM read-only)
+        assets/
+      wiki/           # LLM-generated knowledge base
+        index.md
+        log.md
+        overview.md
+        conventions.md
+        sources/      # per-source summary pages
+        entities/     # entity pages (people, orgs, tools)
+        concepts/     # concept pages (theories, methods, patterns)
+        analyses/     # analysis pages (comparisons, syntheses)
+"""
+
 import asyncio
 import json
 import os
@@ -15,7 +36,7 @@ from core.chat.message_utils import KiraMessageBatchEvent
 # KB registry persistence
 # ---------------------------------------------------------------------------
 
-REGISTRY_FILE = "kb_registry.json"
+REGISTRY_FILE = "kw_registry.json"
 
 
 def _slugify(name: str) -> str:
@@ -47,7 +68,9 @@ class KiraWikiPlugin(BasePlugin):
         super().__init__(ctx, cfg)
         sec = cfg.get("section_basic", {})
         self.enabled = sec.get("enabled", True)
-        self.default_kb_path = sec.get("default_kb_path", "") or ""
+        self.default_kw_path = sec.get("default_kw_path", "") or ""
+        if self.default_kw_path and not os.path.isabs(self.default_kw_path):
+            self.default_kw_path = str(Path(self.default_kw_path).resolve())
         llm_sec = cfg.get("section_llm", {})
         self.llm_model = llm_sec.get("model", "") or ""
         self.max_pages = int(llm_sec.get("max_pages_per_ingest", 15) or 15)
@@ -58,7 +81,7 @@ class KiraWikiPlugin(BasePlugin):
         """插件启动钩子：预加载知识库注册表。"""
         try:
             self._load_registry()
-            logger.info(f"[kira-wiki] initialized, {len(self._registry)} KB(s) registered")
+            logger.info(f"[kira-wiki] initialized, {len(self._registry)} KW(s) registered")
         except Exception as e:
             logger.error(f"[kira-wiki] initialize failed: {e}")
 
@@ -89,16 +112,16 @@ class KiraWikiPlugin(BasePlugin):
             json.dumps(self._registry, ensure_ascii=False, indent=2), "utf-8"
         )
 
-    def _get_kb(self, name: str) -> Optional[Path]:
+    def _get_kw(self, name: str) -> Optional[Path]:
         self._load_registry()
         path = self._registry.get(name)
         if path and Path(path).exists():
             return Path(path)
-        if self.default_kb_path and Path(self.default_kb_path).exists():
-            return Path(self.default_kb_path)
+        if self.default_kw_path and Path(self.default_kw_path).exists():
+            return Path(self.default_kw_path)
         return None
 
-    def _register_kb(self, name: str, path: Path):
+    def _register_kw(self, name: str, path: Path):
         self._load_registry()
         self._registry[name] = str(path)
         self._save_registry()
@@ -123,30 +146,30 @@ class KiraWikiPlugin(BasePlugin):
             return ""
         return (getattr(resp, "text_response", "") or "").strip()
 
-    def _ensure_structure(self, kb: Path):
+    def _ensure_structure(self, kw: Path):
         for d in ["raw", "raw/assets", "wiki/sources", "wiki/entities",
                   "wiki/concepts", "wiki/analyses"]:
-            (kb / d).mkdir(parents=True, exist_ok=True)
+            (kw / d).mkdir(parents=True, exist_ok=True)
         for f, content in [
             ("wiki/index.md", "# 知识库索引\n\n> 由 Kira Wiki 自动维护\n\n## 总览\n\n- [[overview]]\n\n## 来源\n\n## 实体\n\n## 概念\n\n## 分析\n"),
             ("wiki/log.md", "# 操作日志\n\n"),
             ("wiki/overview.md", "# 总览\n\n"),
             ("wiki/conventions.md", "# 使用约定\n\n- 素材放入 raw/，LLM 负责整理\n- 查询用 /wiki query\n"),
         ]:
-            p = kb / f
+            p = kw / f
             if not p.exists():
                 p.write_text(content, "utf-8")
 
-    def _append_log(self, kb: Path, entry: str):
-        log = kb / "wiki/log.md"
-        self._ensure_structure(kb)
+    def _append_log(self, kw: Path, entry: str):
+        log = kw / "wiki/log.md"
+        self._ensure_structure(kw)
         with log.open("a", encoding="utf-8") as fh:
             fh.write(f"- {_now()} {entry}\n")
 
-    def _update_index(self, kb: Path):
+    def _update_index(self, kw: Path):
         """Rebuild wiki/index.md from actual pages."""
-        self._ensure_structure(kb)
-        wiki = kb / "wiki"
+        self._ensure_structure(kw)
+        wiki = kw / "wiki"
         lines = ["# 知识库索引\n", "> 由 Kira Wiki 自动维护\n", "## 总览\n", "- [[overview]]\n"]
         for section, label in [
             ("sources", "来源"), ("entities", "实体"),
@@ -160,8 +183,8 @@ class KiraWikiPlugin(BasePlugin):
             lines.append("")
         (wiki / "index.md").write_text("\n".join(lines), "utf-8")
 
-    def _read_raw_sources(self, kb: Path) -> list[Path]:
-        raw = kb / "raw"
+    def _read_raw_sources(self, kw: Path) -> list[Path]:
+        raw = kw / "raw"
         if not raw.exists():
             return []
         exts = {".md", ".txt", ".pdf", ".png", ".jpg", ".jpeg", ".webp"}
@@ -184,17 +207,17 @@ class KiraWikiPlugin(BasePlugin):
         },
     )
     async def wiki_init(self, event: KiraMessageBatchEvent, name: str, path: str) -> str:
-        kb = Path(path).expanduser()
+        kw = Path(path).expanduser()
         try:
-            kb.mkdir(parents=True, exist_ok=True)
-            self._ensure_structure(kb)
-            self._register_kb(name, kb)
-            self._append_log(kb, f"初始化知识库 {name} @ {kb}")
-            self._update_index(kb)
+            kw.mkdir(parents=True, exist_ok=True)
+            self._ensure_structure(kw)
+            self._register_kw(name, kw)
+            self._append_log(kw, f"初始化知识库 {name} @ {kw}")
+            self._update_index(kw)
         except Exception as e:
             logger.error(f"[kira-wiki] init failed: {e}")
             return f"初始化失败：{e}"
-        return f"知识库 [{name}] 已就绪 @ {kb}\n目录：raw/（素材） + wiki/（LLM 生成）\n用 Obsidian 打开 {kb} 即可浏览图谱"
+        return f"知识库 [{name}] 已就绪 @ {kw}\n目录：raw/（素材） + wiki/（LLM 生成）\n用 Obsidian 打开 {kw} 即可浏览图谱"
 
     @register.tool(
         name="wiki_ingest",
@@ -204,22 +227,22 @@ class KiraWikiPlugin(BasePlugin):
             "properties": {
                 "content": {"type": "string", "description": "素材内容（文本/文章/笔记正文）"},
                 "title": {"type": "string", "description": "素材标题，用于命名文件"},
-                "kb_name": {"type": "string", "description": "知识库名称，留空用默认知识库"},
+                "kw_name": {"type": "string", "description": "知识库名称，留空用默认知识库"},
                 "source_url": {"type": "string", "description": "素材来源链接（可选）"},
             },
             "required": ["content", "title"],
         },
     )
     async def wiki_ingest(self, event: KiraMessageBatchEvent, content: str, title: str,
-                          kb_name: str = "", source_url: str = "") -> str:
-        kb = self._get_kb(kb_name) if kb_name else self._get_kb("")
-        if kb is None:
+                          kw_name: str = "", source_url: str = "") -> str:
+        kw = self._get_kw(kw_name) if kw_name else self._get_kw("")
+        if kw is None:
             return "还没有知识库，先 /wiki init 或告诉我知识库路径"
-        self._ensure_structure(kb)
+        self._ensure_structure(kw)
 
         # 1. write raw source
         slug = _slugify(title)
-        raw_path = kb / "raw" / f"{slug}.md"
+        raw_path = kw / "raw" / f"{slug}.md"
         raw_content = f"# {title}\n\n"
         if source_url:
             raw_content += f"> 来源：{source_url}\n\n"
@@ -244,7 +267,7 @@ class KiraWikiPlugin(BasePlugin):
         )
         llm_out = await self._llm(prompt, system=system)
         if not llm_out:
-            self._append_log(kb, f"收录 {title}（LLM 生成失败，仅存 raw）")
+            self._append_log(kw, f"收录 {title}（LLM 生成失败，仅存 raw）")
             return f"素材已存入 raw/{slug}.md，但 LLM 生成失败，稍后再试"
 
         # 3. parse JSON (tolerate code fences)
@@ -256,16 +279,16 @@ class KiraWikiPlugin(BasePlugin):
             # try to find the JSON object
             m = re.search(r"\{.*\}", cleaned, re.S)
             if not m:
-                self._append_log(kb, f"收录 {title}（JSON 解析失败）")
+                self._append_log(kw, f"收录 {title}（JSON 解析失败）")
                 return f"素材已存入 raw/{slug}.md，但 LLM 输出解析失败"
             try:
                 data = json.loads(m.group(0))
             except Exception as e:
-                self._append_log(kb, f"收录 {title}（JSON 解析失败）")
+                self._append_log(kw, f"收录 {title}（JSON 解析失败）")
                 return f"素材已存入 raw/{slug}.md，但 LLM 输出解析失败：{e}"
 
         # 4. write pages
-        wiki = kb / "wiki"
+        wiki = kw / "wiki"
         written = 0
         summary = data.get("summary", "")
         if summary:
@@ -300,8 +323,8 @@ class KiraWikiPlugin(BasePlugin):
                 t = con.get("title", "")
                 if t:
                     fh.write(f"- 概念：[[concepts/{_slugify(t)}]]\n")
-        self._update_index(kb)
-        self._append_log(kb, f"收录 {title}，生成 {written} 个页面")
+        self._update_index(kw)
+        self._append_log(kw, f"收录 {title}，生成 {written} 个页面")
 
         return f"收录完成：{title}\nraw/{slug}.md + wiki 生成 {written} 个页面（摘要/实体/概念/分析）\nObsidian 里刷新就能看到图谱了"
 
@@ -312,16 +335,16 @@ class KiraWikiPlugin(BasePlugin):
             "type": "object",
             "properties": {
                 "question": {"type": "string", "description": "要查询的问题"},
-                "kb_name": {"type": "string", "description": "知识库名称，留空用默认"},
+                "kw_name": {"type": "string", "description": "知识库名称，留空用默认"},
             },
             "required": ["question"],
         },
     )
-    async def wiki_query(self, event: KiraMessageBatchEvent, question: str, kb_name: str = "") -> str:
-        kb = self._get_kb(kb_name) if kb_name else self._get_kb("")
-        if kb is None:
+    async def wiki_query(self, event: KiraMessageBatchEvent, question: str, kw_name: str = "") -> str:
+        kw = self._get_kw(kw_name) if kw_name else self._get_kw("")
+        if kw is None:
             return "还没有知识库，先初始化一个"
-        wiki = kb / "wiki"
+        wiki = kw / "wiki"
         if not wiki.exists():
             return "知识库是空的"
 
@@ -355,21 +378,21 @@ class KiraWikiPlugin(BasePlugin):
         params={
             "type": "object",
             "properties": {
-                "kb_name": {"type": "string", "description": "知识库名称，留空用默认"},
+                "kw_name": {"type": "string", "description": "知识库名称，留空用默认"},
             },
         },
     )
-    async def wiki_lint(self, event: KiraMessageBatchEvent, kb_name: str = "") -> str:
-        kb = self._get_kb(kb_name) if kb_name else self._get_kb("")
-        if kb is None:
+    async def wiki_lint(self, event: KiraMessageBatchEvent, kw_name: str = "") -> str:
+        kw = self._get_kw(kw_name) if kw_name else self._get_kw("")
+        if kw is None:
             return "还没有知识库"
-        self._ensure_structure(kb)
+        self._ensure_structure(kw)
         issues = []
         stats = {"raw": 0, "sources": 0, "entities": 0, "concepts": 0, "analyses": 0}
-        for p in self._read_raw_sources(kb):
+        for p in self._read_raw_sources(kw):
             stats["raw"] += 1
         for d in ["sources", "entities", "concepts", "analyses"]:
-            dd = kb / "wiki" / d
+            dd = kw / "wiki" / d
             if dd.exists():
                 for p in dd.glob("*.md"):
                     stats[d] += 1
@@ -378,7 +401,7 @@ class KiraWikiPlugin(BasePlugin):
         # check broken wikilinks
         link_re = re.compile(r"\[\[([^\]|#]+)")
         for d in ["sources", "entities", "concepts", "analyses"]:
-            dd = kb / "wiki" / d
+            dd = kw / "wiki" / d
             if not dd.exists():
                 continue
             for p in dd.glob("*.md"):
@@ -387,10 +410,10 @@ class KiraWikiPlugin(BasePlugin):
                     target = m.group(1).strip()
                     if target in ("overview", "index", "log", "conventions"):
                         continue
-                    if not list((kb / "wiki").rglob(f"{target}.md")):
+                    if not list((kw / "wiki").rglob(f"{target}.md")):
                         issues.append(f"断链 {p.stem} -> [[{target}]]")
         lines = [
-            f"知识库体检 @ {kb}",
+            f"知识库体检 @ {kw}",
             f"素材 raw: {stats['raw']} | 摘要: {stats['sources']} | 实体: {stats['entities']} | 概念: {stats['concepts']} | 分析: {stats['analyses']}",
         ]
         if issues:
@@ -406,18 +429,18 @@ class KiraWikiPlugin(BasePlugin):
         params={
             "type": "object",
             "properties": {
-                "kb_name": {"type": "string", "description": "知识库名称，留空用默认"},
+                "kw_name": {"type": "string", "description": "知识库名称，留空用默认"},
             },
         },
     )
-    async def wiki_list(self, event: KiraMessageBatchEvent, kb_name: str = "") -> str:
-        kb = self._get_kb(kb_name) if kb_name else self._get_kb("")
-        if kb is None:
+    async def wiki_list(self, event: KiraMessageBatchEvent, kw_name: str = "") -> str:
+        kw = self._get_kw(kw_name) if kw_name else self._get_kw("")
+        if kw is None:
             return "还没有知识库"
-        self._ensure_structure(kb)
-        lines = [f"知识库 @ {kb}"]
+        self._ensure_structure(kw)
+        lines = [f"知识库 @ {kw}"]
         for d, label in [("sources", "摘要"), ("entities", "实体"), ("concepts", "概念"), ("analyses", "分析")]:
-            dd = kb / "wiki" / d
+            dd = kw / "wiki" / d
             names = [p.stem for p in sorted(dd.glob("*.md"))] if dd.exists() else []
             lines.append(f"{label}（{len(names)}）：{'、'.join(names[:15]) or '空'}")
         return "\n".join(lines)
