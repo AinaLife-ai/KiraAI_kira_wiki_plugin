@@ -1,33 +1,62 @@
 {
-  "type": "object",
-  "properties": {
-    "section_basic": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "启用插件",
-          "default": true
-        },
-        "default_kw_path": {
-          "type": "string",
-          "description": "默认知识库根目录（支持相对 KiraAI 根目录的相对路径，如 data/kw）",
-          "default": "data/kw"
+  "section_basic": {
+    "type": "section",
+    "name": "Basic",
+    "collapsed": false,
+    "locales": {
+      "zh": { "name": "常规" }
+    },
+    "fields": {
+      "enabled": {
+        "type": "switch",
+        "name": "Enabled",
+        "default": true,
+        "locales": {
+          "zh": { "name": "启用插件", "hint": "关闭后工具与侧边栏面板都不再工作" }
+        }
+      },
+      "default_kw_path": {
+        "type": "string",
+        "name": "Default knowledge base path",
+        "default": "data/kw",
+        "locales": {
+          "zh": {
+            "name": "默认知识库目录",
+            "hint": "Obsidian vault 根目录；支持相对 KiraAI 根目录的相对路径（如 data/kw）或绝对路径。留空则每次都要指定知识库名"
+          }
         }
       }
+    }
+  },
+  "section_llm": {
+    "type": "section",
+    "name": "LLM",
+    "collapsed": false,
+    "locales": {
+      "zh": { "name": "模型" }
     },
-    "section_llm": {
-      "type": "object",
-      "properties": {
-        "model": {
-          "type": "string",
-          "description": "用于生成 wiki 页面的模型，留空用默认 LLM",
-          "default": ""
-        },
-        "max_pages_per_ingest": {
-          "type": "integer",
-          "description": "单次 ingest 最多生成的页面数",
-          "default": 15
+    "fields": {
+      "model": {
+        "type": "model_select",
+        "model_type": "llm",
+        "name": "Model",
+        "default": "",
+        "locales": {
+          "zh": {
+            "name": "生成模型",
+            "hint": "下拉选择用于生成 wiki 页面的模型；留空使用 KiraAI 默认 LLM。旧配置里手填的「服务商:模型名」仍可用，插件会自动解析并迁移成下拉值"
+          }
+        }
+      },
+      "max_pages_per_ingest": {
+        "type": "integer",
+        "name": "Max pages per ingest",
+        "default": 15,
+        "locales": {
+          "zh": {
+            "name": "单次收录最多生成页数",
+            "hint": "一次 wiki_ingest 最多生成多少页面（含摘要/实体/概念/分析）"
+          }
         }
       }
     }
