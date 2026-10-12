@@ -1,0 +1,9 @@
+/* Kira Wiki · 侧边栏图标（Lucide 风格：24×24、stroke 2、round cap）
+   取 Lucide「library-big」骨架 + 自定义晶格节点，表达「知识晶格」 */
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 3v18"/>
+  <path d="M9 3v18"/>
+  <path d="M9 6.5h6.5a3 3 0 0 1 3 3V15a3 3 0 0 1-3 3H9"/>
+  <circle cx="15.5" cy="12" r="1.6"/>
+</svg>
