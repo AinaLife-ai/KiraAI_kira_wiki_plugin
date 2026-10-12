@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-store">
+<title>Kira Wiki · 知识晶格</title>
+<link rel="stylesheet" href="style.css">
+<script>
+  /* 主题在首帧之前定下来，避免闪白；尊重系统偏好 */
+  (function () {
+    try {
+      var saved = localStorage.getItem("kw-theme");
+      var sys = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+      document.documentElement.dataset.theme = saved === "light" || saved === "dark" ? saved : (sys ? "light" : "dark");
+    } catch (e) { document.documentElement.dataset.theme = "dark"; }
+  })();
+</script>
+</head>
+<body>
+
+<!-- ═══════════ Lucide 图标 sprite（内联，离线可用，无 emoji） ═══════════ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <g id="i-library"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></g>
+    <g id="i-search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></g>
+    <g id="i-save"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></g>
+    <g id="i-pencil"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></g>
+    <g id="i-trash"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></g>
+    <g id="i-plus"><path d="M12 5v14"/><path d="M5 12h14"/></g>
+    <g id="i-refresh"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></g>
+    <g id="i-pulse"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></g>
+    <g id="i-sparkle"><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><path d="m6.3 6.3 2.4 2.4"/><path d="m15.3 15.3 2.4 2.4"/><path d="m17.7 6.3-2.4 2.4"/><path d="m8.7 15.3-2.4 2.4"/></g>
+    <g id="i-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></g>
+    <g id="i-file"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h6"/><path d="M9 13h6"/><path d="M9 17h4"/></g>
+    <g id="i-link"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></g>
+    <g id="i-grid"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></g>
+    <g id="i-book"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></g>
+    <g id="i-warn"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></g>
+    <g id="i-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></g>
+    <g id="i-check"><path d="M20 6 9 17l-5-5"/></g>
+    <g id="i-moon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9"/></g>
+    <g id="i-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.3 17.7-1.4 1.4"/><path d="m19.1 4.9-1.4 1.4"/></g>
+    <g id="i-hash"><path d="M4 9h16"/><path d="M4 15h16"/><path d="M10 3 8 21"/><path d="M16 3l-2 18"/></g>
+    <g id="i-arrow"><path d="M7 17 17 7"/><path d="M7 7h10v10"/></g>
+    <g id="i-layers"><path d="m12 2 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></g>
+    <g id="i-dot"><circle cx="12" cy="12" r="3"/></g>
+    <g id="i-clock"><circle cx="12" cy="12" r="10"/><path d="M12 7v5l3 2"/></g>
+    <g id="i-scroll"><path d="M12 15V3"/><path d="m8 7 4-4 4 4"/><path d="M20 21H4a2 2 0 0 1 0-4h16"/></g>
+    <g id="i-tag"><path d="M12.6 2.6A2 2 0 0 1 14 2h6a2 2 0 0 1 2 2v6a2 2 0 0 1-.6 1.4l-8.4 8.4a2 2 0 0 1-2.8 0l-6-6a2 2 0 0 1 0-2.8Z"/><path d="M17 7h.01"/></g>
+    <g id="i-max"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></g>
+  </defs>
+</svg>
+
+<!-- ═══════════ 背景：晶格画布 + 光晕 ═══════════ -->
+<div class="stage" aria-hidden="true">
+  <canvas id="lattice"></canvas>
+  <div class="grain"></div>
+  <div class="glow" data-par="0.02"></div>
+  <div class="scan"></div>
+</div>
+
+<!-- ═══════════ 开屏 ═══════════ -->
+<div class="boot" id="boot">
+  <div class="boot-mark">
+    <svg class="boot-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round">
+      <use href="#i-library"/>
+    </svg>
+    <div class="boot-grid" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  </div>
+  <div class="boot-line">COMPILING KNOWLEDGE LATTICE</div>
+  <div class="boot-bar"><span></span></div>
+</div>
+
+<!-- ═══════════ 主体 ═══════════ -->
+<main class="shell" id="shell">
+
+  <header class="brand" data-reveal>
+    <div class="brand-row">
+      <span class="mark"><svg viewBox="0 0 24 24"><use href="#i-library"/></svg></span>
+      <span class="kicker">KIRA · WIKI</span>
+    </div>
+    <h1 class="display">
+      <span class="display-line">知识晶格</span>
+      <span class="display-line alt">LATTICE</span>
+    </h1>
+    <div class="brand-meta">
+      <span class="tag-mono" id="kbPath">—</span>
+      <span class="dot-sep"></span>
+      <span class="tag-mono" id="kbStamp">—</span>
+    </div>
+  </header>
+
+  <nav class="nav" data-reveal>
+    <div class="nav-head"><svg viewBox="0 0 24 24"><use href="#i-layers"/></svg><span class="kicker">结构 / SECTIONS</span></div>
+    <ul class="nav-list" id="navList"></ul>
+    <div class="nav-foot">
+      <div class="metric" data-metric="raw"><span class="metric-num" id="mRaw">0</span><span class="metric-lab">素材</span></div>
+      <div class="metric" data-metric="pages"><span class="metric-num" id="mPages">0</span><span class="metric-lab">页面</span></div>
+      <div class="metric" data-metric="links"><span class="metric-num" id="mLinks">0</span><span class="metric-lab">链接</span></div>
+    </div>
+  </nav>
+
+  <section class="deck" data-reveal>
+    <div class="hud">
+      <button class="icobtn" id="btnSearch" title="搜索 (/)"><svg viewBox="0 0 24 24"><use href="#i-search"/></svg></button>
+      <input id="searchInput" class="search" type="search" placeholder="搜索页面 / 实体 / 概念…" spellcheck="false" autocomplete="off">
+      <div class="hud-spacer"></div>
+      <button class="icobtn" id="btnAsk" title="问知识库 (A)"><svg viewBox="0 0 24 24"><use href="#i-sparkle"/></svg></button>
+      <button class="icobtn" id="btnLint" title="体检 (L)"><svg viewBox="0 0 24 24"><use href="#i-pulse"/></svg></button>
+      <button class="icobtn" id="btnReindex" title="重建索引 (G)"><svg viewBox="0 0 24 24"><use href="#i-refresh"/></svg></button>
+      <button class="icobtn" id="btnNew" title="新建页面 (N)"><svg viewBox="0 0 24 24"><use href="#i-plus"/></svg></button>
+      <button class="icobtn" id="btnTheme" title="切换主题"><svg viewBox="0 0 24 24"><use href="#i-moon"/></svg></button>
+    </div>
+
+    <div class="empty" id="empty">
+      <svg class="empty-icon" viewBox="0 0 24 24"><use href="#i-grid"/></svg>
+      <p class="empty-lead" id="emptyLead">正在读取知识库…</p>
+      <p class="empty-sub" id="emptySub"></p>
+    </div>
+
+    <div class="legend" id="legend">
+      <span class="lg"><i class="sw sw-s"></i>来源</span>
+      <span class="lg"><i class="sw sw-e"></i>实体</span>
+      <span class="lg"><i class="sw sw-c"></i>概念</span>
+      <span class="lg"><i class="sw sw-a"></i>分析</span>
+      <span class="lg hint">滚轮缩放 · 拖拽节点 · 双击聚焦</span>
+    </div>
+  </section>
+</main>
+
+<!-- ═══════════ 阅读 / 编辑抽屉 ═══════════ -->
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-grip" id="drawerGrip"></div>
+  <header class="drawer-head">
+    <div class="dh-left">
+      <span class="chip" id="pgSection">—</span>
+      <h2 class="drawer-title" id="pgTitle">—</h2>
+    </div>
+    <div class="dh-right">
+      <button class="icobtn tiny" id="btnTabRead" title="阅读"><svg viewBox="0 0 24 24"><use href="#i-book"/></svg></button>
+      <button class="icobtn tiny" id="btnTabEdit" title="编辑 (E)"><svg viewBox="0 0 24 24"><use href="#i-pencil"/></svg></button>
+      <button class="icobtn tiny" id="btnSave" title="保存 (⌘/Ctrl+S)"><svg viewBox="0 0 24 24"><use href="#i-save"/></svg></button>
+      <button class="icobtn tiny danger" id="btnDelete" title="删除页面"><svg viewBox="0 0 24 24"><use href="#i-trash"/></svg></button>
+      <button class="icobtn tiny" id="btnClose" title="关闭 (Esc)"><svg viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+    </div>
+  </header>
+  <div class="drawer-meta">
+    <span class="tag-mono" id="pgPath">—</span>
+    <span class="tag-mono" id="pgSize">—</span>
+    <span class="tag-mono dirty" id="pgDirty">已同步</span>
+  </div>
+  <article class="reader" id="reader"></article>
+  <textarea class="editor" id="editor" spellcheck="false" hidden></textarea>
+  <footer class="drawer-foot">
+    <span class="tag-mono" id="pgCount">0 字</span>
+    <span class="dot-sep"></span>
+    <span class="tag-mono" id="pgUpdated">—</span>
+  </footer>
+</aside>
+
+<!-- ═══════════ 体检 / 问答 面板 ═══════════ -->
+<section class="sheet" id="sheet" aria-hidden="true">
+  <header class="sheet-head">
+    <span class="chip" id="sheetKind">体检</span>
+    <button class="icobtn tiny" id="btnSheetClose" title="关闭"><svg viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+  </header>
+  <div class="sheet-body" id="sheetBody"></div>
+</section>
+
+<!-- ═══════════ 底栏日志 ticker ═══════════ -->
+<footer class="ticker" id="ticker">
+  <span class="ticker-key"><svg viewBox="0 0 24 24"><use href="#i-clock"/></svg>LOG</span>
+  <div class="ticker-track"><div class="ticker-run" id="tickerRun"></div></div>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="graph.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
