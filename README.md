@@ -53,13 +53,16 @@ KiraAI_kira_wiki_plugin 是 [KiraAI](https://github.com/xxynet/KiraAI) 框架的
 
 ## ✨ 它能干什么
 
-| 命令 | 作用 |
+AI 通过 4 个工具操作知识库（工具 schema 每轮请求都会注入，所以保持精简）：
+
+| 工具 | 作用 |
 | --- | --- |
-| `wiki_init` | 初始化一个知识库（建好 raw/ 和 wiki/ 目录结构） |
+| `wiki_init` | 初始化一个知识库（建好 raw/ 与 wiki/ 目录结构并注册） |
 | `wiki_ingest` | 收录素材：写入 raw/，LLM 自动生成摘要页、实体页、概念页、分析页 |
-| `wiki_query` | 基于 wiki 页面回答问题，并标注信息来源 |
-| `wiki_lint` | 知识库体检：查空页面、断链、目录结构 |
-| `wiki_list` | 看一眼知识库里都有啥 |
+| `wiki_query` | 查询问答：**按相关度排序**挑页（默认 8 页 / 14k 字符预算），回答标注来源页面 |
+| `wiki_status` | 状态与体检：默认列概览；`check=true` 出完整体检（空页 / 断链 / 孤立页） |
+
+> v1.1.0 起 `wiki_list` 与 `wiki_lint` 合并为 `wiki_status`（语义重叠，且少一个工具就少一份常驻 token）。
 
 ## 🗂️ 目录结构
 
@@ -86,8 +89,9 @@ data/kw/                  # 默认知识库（可在配置里改路径）
 2. 对 bot 说：**「建个知识库，路径 C:\xxx\my-kw」**（会调用 `wiki_init`）
 3. 丢素材：**「把这段话收进知识库：……」**（会调用 `wiki_ingest`）
 4. 用 Obsidian 打开知识库目录，看图谱、看双链，完事
+5. 或者直接在 KiraAI 主 WebUI 侧边栏点 **「知识库」**：看晶格图、读页面、**直接改页面**（见下）
 
-> 没装 Obsidian？纯文本编辑器也能看，只是没有图谱和双链跳转。
+> 没装 Obsidian？纯文本编辑器也能看，只是没有图谱和双链跳转；面板里也能读能改。
 
 ## ⚙️ 配置
 
@@ -117,10 +121,36 @@ LLM 生成失败也不慌，素材已经躺在 `raw/` 里了，不会丢。
 | `web/` | 面板前端：`index.html` / `style.css` / `app.js` / `graph.js`（零依赖、Lucide sprite 内联） |
 | `assets/menu.svg` | 侧边栏菜单图标（Lucide 风格） |
 
+- 工具走 KiraAI 的 `@register.tool`；面板接口走 `@register.api`（全部 `auth=True`）；页面走 `@register.page`
+- 磁盘操作一律 `asyncio.to_thread`，不在事件循环里做同步 I/O
+- 模型解析：`ctx.get_llm_client()` 优先，显示名走 `provider_mgr` 反查（2.x / 3.0 双世代）
+- 无第三方依赖（`wiki_core.py` 纯标准库）
 
-- 插件主体：`main.py`（单文件，无第三方依赖）
-- 工具注册走 KiraAI 的 `@register.tool` 装饰器
-- 页面生成靠 `ctx.get_default_llm_client()`，可指定模型
+## 📝 更新日志
+
+<details>
+<summary>展开查看更新日志（当前版本：v1.1.0）</summary>
+
+### v1.1.0
+- 🖥️ **侧边栏面板**：知识晶格（力导向 wikilink 图）、阅读抽屉、**热编辑**（`⌘/Ctrl+S`）、搜索、体检、问答、
+  重建索引、新建页；墨/纸双主题，Lucide 图标内联（无 CDN、无 emoji），`prefers-reduced-motion` 降级。
+- 🧩 **工具精简 5 → 4**：`wiki_list` + `wiki_lint` 合并为 `wiki_status(check=false|true)`。
+- ⚡ **非阻塞**：37 处磁盘操作移出事件循环（`asyncio.to_thread`）。
+- 🎯 **检索优化**：关键词排序 + 字符预算（默认 8 页 / 14k 字符），不再把整库塞进 prompt。
+- 🐛 **修复**：LLM 返回的 `entities`/`concepts` 非数组时切片崩溃；指定不存在的库名会静默改写到默认库；
+  同名素材覆盖无提示。
+- 🖼️ **图标整形**：裁掉纯色外边、512×512 圆角透明、调色板压缩（1263 KB → 71.5 KB）。
+- 🔒 **面板安全边界**：读写经 `resolve_rel()` 校验，只允许库内相对路径 `.md`，穿越/绝对路径一律 400。
+
+### v1.0.2
+- 🐛 **模型配置解析补全**：`提供商:可读模型名` 中的**服务商显示名**（如 `Agnes（CN）`）现在会解析成实例 ID；
+  解析失败告警并回退默认 LLM（此前会静默返回空串，表现为「wiki 生成没反应」）。
+
+### v1.0.1
+- 🐛 **3.0 兼容**：`model` 配置沿用 2.x 习惯的「可读模型名」，插件自动反查内部稳定 ID
+  （rc.1 的框架解析只认内部 ID / 迁移旧名）。
+
+</details>
 
 ## 📜 License
 
@@ -128,4 +158,4 @@ AGPL-3.0，随便玩，记得给个 star 就行（不是）
 
 ---
 
-*Made with ❤️ by 爱奈丽 —— 一个很会聊天的代码*
+*Made with ❤️ by 爱奈丽 & znq19 —— 一个很会聊天的代码*
