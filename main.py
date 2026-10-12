@@ -133,6 +133,18 @@ class KiraWikiPlugin(BasePlugin):
                 client = self.ctx.get_llm_client(self.llm_model)
             except Exception:
                 pass
+            if client is None and ":" in self.llm_model:
+                # 3.0 兼容：用户按 2.x 习惯填「提供商:可读名」；rc1 起新模型的可读名直传解析不到
+                # —— 按 model_name 反查内部 ID 再试。2.x 直传即成功，不进此分支。
+                try:
+                    _pid, _mid = self.llm_model.split(":", 1)
+                    pm = getattr(self.ctx, "provider_mgr", None)
+                    for mi in (pm.get_model_infos(_pid) if pm else []) or []:
+                        if getattr(mi, "model_name", None) == _mid and getattr(mi, "model_id", None):
+                            client = self.ctx.get_llm_client(f"{_pid}:{mi.model_id}")
+                            break
+                except Exception:
+                    pass
         if client is None:
             return ""
         messages = []
