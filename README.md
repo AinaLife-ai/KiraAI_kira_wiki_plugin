@@ -1,8 +1,8 @@
-# 📚 KiraAI_kira_wiki_plugin
+# 📚 Kira Wiki · 知识晶格
 
 > 让 AI 帮你把零碎素材编译成一本会自己长出来的知识库
 
-KiraAI_kira_wiki_plugin 是 [KiraAI](https://github.com/xxynet/KiraAI) 框架的插件，灵感来自 Karpathy 的 [LLM Wiki 思路](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)：**LLM 就是编译器，Obsidian 就是 IDE**。
+**Kira Wiki**（插件 ID `KiraAI_kira_wiki_plugin`）是 [KiraAI](https://github.com/xxynet/KiraAI) 框架的插件，灵感来自 Karpathy 的 [LLM Wiki 思路](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)：**LLM 就是编译器，Obsidian 就是 IDE**。
 
 你只管把素材（文章、笔记、聊天记录、随手抄的东西）丢进去，AI 会自动帮你整理成结构化的 wiki 页面，还带互相引用的双链，用 Obsidian 打开就是一张知识图谱。
 

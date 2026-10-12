@@ -679,7 +679,7 @@ class KiraWikiPlugin(BasePlugin):
     @register.page(
         "/index",
         menu=PageMenu(
-            label={"zh": "知识库", "en": "Kira Wiki"},
+            label={"zh": "知识晶格", "en": "Kira Wiki"},
             icon="assets/menu.svg",
             order=96,
         ),
