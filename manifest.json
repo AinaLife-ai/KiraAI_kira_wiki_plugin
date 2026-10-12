@@ -1,9 +1,9 @@
 {
   "plugin_id": "KiraAI_kira_wiki_plugin",
-  "display_name": "KiraAI_kira_wiki_plugin",
+  "display_name": "Kira Wiki",
   "version": "1.1.1",
   "author": "ainali & znq19",
-  "description": "基于 Karpathy LLM Wiki 理念的 Obsidian 知识库管理插件：raw 素材收录 + LLM 自动生成 wiki 页面、实体、概念与交叉引用；内置侧边栏面板（知识晶格视图 / 页面阅读 / 热编辑 / 体检 / 问答）。",
+  "description": "把零碎素材编译成一本会自己生长的 Obsidian 知识库：raw 收录 + LLM 自动生成 wiki 页面、实体、概念与交叉引用；内置知识晶格面板（图谱 / 阅读 / 热编辑 / 体检 / 问答）。",
   "repo": "https://github.com/AinaLife-ai/KiraAI_kira_wiki_plugin",
   "icon": "icon.png",
   "core_version": ">=2.33.1",
@@ -14,8 +14,12 @@
   ],
   "locales": {
     "zh": {
-      "display_name": "KiraAI_kira_wiki_plugin",
-      "description": "基于 Karpathy LLM Wiki 理念的 Obsidian 知识库管理插件"
+      "display_name": "Kira Wiki · 知识晶格",
+      "description": "把零碎素材编译成会自己生长的知识库：收录进 raw/，LLM 生成 wiki 页面；内置知识晶格面板，可读、可改、可问答。"
+    },
+    "en": {
+      "display_name": "Kira Wiki",
+      "description": "Compile loose notes into a self-growing Obsidian knowledge base — ingest to raw/, let the LLM write linked wiki pages, browse & hot-edit them on the built-in lattice panel."
     }
   }
 }
