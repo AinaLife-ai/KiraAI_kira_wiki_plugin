@@ -104,6 +104,10 @@
   <section class="deck" data-reveal>
     <div class="hud">
       <button class="icobtn" id="btnSearch" title="搜索 (/)"><svg viewBox="0 0 24 24"><use href="#i-search"/></svg></button>
+      <button class="modelchip" id="modelChip" title="当前生成模型（在插件设置里下拉选择）">
+        <svg viewBox="0 0 24 24"><use href="#i-sparkle"/></svg>
+        <span class="mc-label" id="modelLabel">默认 LLM</span>
+      </button>
       <input id="searchInput" class="search" type="search" placeholder="搜索页面 / 实体 / 概念…" spellcheck="false" autocomplete="off">
       <div class="hud-spacer"></div>
       <button class="icobtn" id="btnAsk" title="问知识库 (A)"><svg viewBox="0 0 24 24"><use href="#i-sparkle"/></svg></button>

@@ -180,6 +180,21 @@ html[data-theme="light"] .grain{opacity:.02}
 .icobtn.tiny svg{width:14px;height:14px}
 .icobtn.danger:hover{color:var(--flame);border-color:color-mix(in oklab,var(--flame) 50%,transparent)}
 .icobtn.on{color:var(--ink);background:var(--acid);border-color:var(--acid)}
+
+/* ── 当前生成模型芯片：与插件配置同源 ── */
+.modelchip{
+  display:flex;align-items:center;gap:7px;max-width:280px;
+  padding:0 10px;height:34px;border:1px solid var(--hair);border-radius:var(--r-sm);
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--fg-dim);background:var(--glass);
+  transition:color .3s var(--ease),border-color .3s var(--ease),background .3s var(--ease);
+}
+.modelchip svg{width:14px;height:14px;stroke-width:1.7;color:var(--acid);flex-shrink:0}
+.modelchip:hover{color:var(--fg);border-color:var(--hair-hi)}
+.modelchip .mc-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.modelchip.warn{border-color:color-mix(in oklab,var(--flame) 55%,transparent);color:var(--flame)}
+.modelchip.warn svg{color:var(--flame)}
+@media (max-width:1280px){.modelchip{max-width:170px}}
 .search{
   flex:1;max-width:420px;background:none;border:0;outline:none;color:var(--fg);
   font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;padding:8px 4px;

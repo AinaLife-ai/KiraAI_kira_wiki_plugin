@@ -126,7 +126,21 @@
     roll($("mLinks"), g ? g.links.length : 0);
   }
 
+  function renderModel() {
+    const chip = $("modelChip"), lab = $("modelLabel");
+    const m = (state.lib && state.lib.model) || null;
+    if (!chip || !lab) return;
+    if (!m) { lab.textContent = "默认 LLM"; chip.classList.remove("warn"); return; }
+    lab.textContent = m.label || (m.value ? m.value : "默认 LLM");
+    const bad = m.value && !m.ok;
+    chip.classList.toggle("warn", !!bad);
+    chip.title = bad
+      ? `配置的模型解析不到：${m.error || "未知原因"}\n当前回退使用默认 LLM。请在插件设置里重新选择。`
+      : `当前生成模型：${m.label}${m.canonical ? "\n引用值：" + m.canonical : "\n留空 ⇒ 使用 KiraAI 默认 LLM"}`;
+  }
+
   function renderChrome() {
+    renderModel();
     if (!state.lib || !state.lib.current) return;
     const cur = state.lib.current;
     $("kbPath").textContent = cur.path;
@@ -418,6 +432,9 @@
       }, 520);
     });
   }
+
+  /* 调试钩子：面板状态只读暴露（排障用，不影响功能） */
+  window.__KW = { get state() { return state; }, renderModel: renderModel };
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();

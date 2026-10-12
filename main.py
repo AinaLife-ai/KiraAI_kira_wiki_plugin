@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.plugin import BasePlugin, PageMenu, PluginPage, logger, register
+from core.utils.path_utils import get_config_path
 from core.provider import LLMRequest
 from core.chat.message_utils import KiraMessageBatchEvent
 
@@ -37,6 +38,7 @@ except ImportError:        # 兜底：以脚本形式加载
     import wiki_core as wc
 
 REGISTRY_FILE = "kw_registry.json"
+PLUGIN_ID = "KiraAI_kira_wiki_plugin"
 
 SYSTEM_COMPILER = (
     "你是知识库编译器。根据用户提供的素材，生成 Obsidian markdown 页面。"
@@ -81,12 +83,64 @@ class KiraWikiPlugin(BasePlugin):
         self._registry_path = Path(self.ctx.get_plugin_data_dir()) / REGISTRY_FILE
 
     async def initialize(self):
-        """启动：预加载知识库注册表（磁盘读放线程池）。"""
+        """启动：预加载知识库注册表 + 把历史配置整理成当前形态。"""
         try:
             await wc.to_thread(self._load_registry)
+            await self._migrate_config()
             logger.info(f"[kira-wiki] initialized, {len(self._registry)} KW(s) registered")
         except Exception as e:
             logger.error(f"[kira-wiki] initialize failed: {e}")
+
+    # ------------------------------------------------------------------
+    # 配置：迁移 + 回写（与 schema.json 的字段形态保持一致）
+    # ------------------------------------------------------------------
+
+    async def _migrate_config(self) -> None:
+        """一次性、幂等：
+
+        ① 清掉早期 schema 被框架误解析时留下的顶层 `properties` 幽灵键
+           （旧 schema 是 JSON-Schema 形态，框架按顶层键建字段 ⇒ 配置里只落了 `properties`）；
+        ② 手填的「服务商:模型名」→ 规范成「实例ID:内部ID」，让下拉框能正确回显；
+        ③ 真改了才回写配置文件（plugin_cfg 与注册表内存里是同一份 dict）。
+        """
+        changed = False
+        legacy = self.plugin_cfg.get("properties")
+        if isinstance(legacy, dict):
+            for key in ("section_basic", "section_llm"):
+                if isinstance(legacy.get(key), dict) and key not in self.plugin_cfg:
+                    self.plugin_cfg[key] = legacy[key]
+            self.plugin_cfg.pop("properties", None)
+            changed = True
+        elif legacy is not None:
+            self.plugin_cfg.pop("properties", None)
+            changed = True
+
+        if self.llm_model:
+            canonical, label, err = await wc.to_thread(self._canonical_model_ref, self.llm_model)
+            if canonical and canonical != self.llm_model:
+                logger.info("[kira-wiki] 模型配置 %r 已规范化为 %r（%s）",
+                            self.llm_model, canonical, label)
+                self.llm_model = canonical
+                self.plugin_cfg.setdefault("section_llm", {})["model"] = canonical
+                changed = True
+            elif err:
+                logger.warning("[kira-wiki] 模型配置 %r 解析失败：%s（将回退默认 LLM）", self.llm_model, err)
+
+        if changed:
+            ok = await wc.to_thread(self._persist_config)
+            if ok:
+                logger.info("[kira-wiki] 插件配置已整理并回写")
+
+    def _persist_config(self) -> bool:
+        """把内存里的插件配置写回 data/config/plugins/<id>.json（与内置 agent 插件同款做法）。"""
+        try:
+            path = get_config_path() / "plugins" / f"{PLUGIN_ID}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self.plugin_cfg, ensure_ascii=False, indent=4), "utf-8")
+            return True
+        except Exception as e:
+            logger.error(f"[kira-wiki] 配置回写失败: {e}")
+            return False
 
     async def terminate(self):
         try:
@@ -140,28 +194,54 @@ class KiraWikiPlugin(BasePlugin):
             return Path(self.default_kw_path)
         return None
 
-    def _resolve_llm_client(self, model_str: str):
-        """解析 "提供商:模型"：两段都认「人类可读名」（webui 里看到的名字）。
-
-        · 提供商：实例 ID 或 webui 显示名
-        · 模型：内部稳定 ID，或按 2.x 习惯填的可读模型名（3.0 起在 model_name）
-
-        3.0 rc.1 的框架解析只认「实例 ID:内部 ID」；2.x 直传即成功、不进反查分支。
-        """
+    def _model_label(self, ref: str) -> str:
+        """把模型引用变成给人看的标签：`服务商显示名 · 可读模型名`（解析不出就退回引用本身）。"""
         try:
-            client = self.ctx.get_llm_client(model_str)
-            if client is not None:
-                return client
+            if not ref or ":" not in ref:
+                return ref or ""
+            pid, mid = ref.split(":", 1)
+            pm = getattr(self.ctx, "provider_mgr", None)
+            name = pid
+            if pm is not None:
+                prov = pm.get_provider(pid)
+                if prov is not None:
+                    name = getattr(prov, "provider_name", "") or pid
+                for mi in (pm.get_model_infos(pid) or []):
+                    if getattr(mi, "model_id", "") == mid:
+                        return f"{name} · {getattr(mi, 'model_name', '') or mid}"
+            return f"{name} · {mid}"
+        except Exception:
+            return ref
+
+    def _canonical_model_ref(self, model_str: str):
+        """把配置里的模型值规范成「实例ID:内部ID」，并给出可读标签。
+
+        返回 (canonical, label, err)：
+          · canonical —— 能直接喂给 ctx.get_llm_client() 的引用（解析不出为 ""）
+          · label     —— 给人看的 `服务商显示名 · 可读模型名`
+          · err       —— 解析失败原因（成功为 None）
+
+        两代通用：先直传（2.x 下配置值本就是可读名，一次命中），再走显示名解析——
+        3.0 rc.1 的框架只认「实例ID:内部ID」，而用户在 webui 里只会看到显示名。
+        """
+        raw = (model_str or "").strip()
+        if not raw:
+            return "", "", None
+        try:                                    # ① 直传：当前框架能解析就已是规范值
+            if self.ctx.get_llm_client(raw) is not None:
+                return raw, self._model_label(raw), None
         except Exception:
             pass
-        if ":" not in (model_str or ""):
-            return None
-        pid_raw, mid_raw = (s.strip() for s in model_str.split(":", 1))
+        if ":" not in raw:
+            return "", "", "格式应为「服务商:模型」"
+        pid_raw, mid_raw = (s.strip() for s in raw.split(":", 1))
         if not pid_raw or not mid_raw:
-            return None
+            return "", "", "格式应为「服务商:模型」"
         pm = getattr(self.ctx, "provider_mgr", None)
         if pm is None:
-            return None
+            return "", "", "无法访问模型管理器"
+
+        # ② 服务商：实例 ID 直查 → 显示名精确 → 去空白精确 → 包含（多候选取名字最短者）
         real_pid = pid_raw if pm.get_provider(pid_raw) is not None else None
         if real_pid is None:
             try:
@@ -188,14 +268,30 @@ class KiraWikiPlugin(BasePlugin):
                 cands.sort()
                 real_pid = cands[0][2]
         if real_pid is None:
-            logger.warning("[kira-wiki] 找不到服务商 %r（可填 webui 显示名或实例 ID），回退默认 LLM", pid_raw)
-            return None
+            return "", "", f"找不到服务商「{pid_raw}」（可填 webui 显示名或实例 ID）"
+
+        # ③ 模型：内部 ID 直查 → 该服务商下按可读名（model_name）反查
         if pm.get_model_info(real_pid, mid_raw, "llm") is not None:
-            return self.ctx.get_llm_client(f"{real_pid}:{mid_raw}")
+            ref = f"{real_pid}:{mid_raw}"
+            return ref, self._model_label(ref), None
         for mi in (pm.get_model_infos(real_pid) or []):
             if getattr(mi, "model_name", None) == mid_raw and getattr(mi, "model_id", None):
-                return self.ctx.get_llm_client(f"{real_pid}:{mi.model_id}")
-        logger.warning("[kira-wiki] 服务商 %r 下找不到模型 %r，回退默认 LLM", real_pid, mid_raw)
+                ref = f"{real_pid}:{mi.model_id}"
+                return ref, self._model_label(ref), None
+        return "", "", f"服务商「{real_pid}」下找不到模型「{mid_raw}」"
+
+    def _resolve_llm_client(self, model_str: str):
+        """解析配置 → 客户端；解析不出来返回 None（由调用方回退默认 LLM）。"""
+        canonical, _label, err = self._canonical_model_ref(model_str)
+        if canonical:
+            try:
+                client = self.ctx.get_llm_client(canonical)
+                if client is not None:
+                    return client
+            except Exception:
+                pass
+        if err:
+            logger.warning("[kira-wiki] 模型配置 %r 解析失败（%s），回退默认 LLM", model_str, err)
         return None
 
     async def _llm(self, prompt: str, system: str = "") -> str:
@@ -451,6 +547,15 @@ class KiraWikiPlugin(BasePlugin):
                     "stats": wc.stats(kw),
                     "log": wc.recent_log(kw, 30),
                 }
+            # 模型：与配置同源（下拉选的就是这个值），面板据此显示「当前生成模型」
+            canonical, label, err = self._canonical_model_ref(self.llm_model)
+            data["model"] = {
+                "value": self.llm_model or "",
+                "canonical": canonical,
+                "label": label or ("KiraAI 默认 LLM" if not self.llm_model else (self.llm_model or "")),
+                "ok": bool(canonical) or not self.llm_model,
+                "error": err,
+            }
             return data
         return await wc.to_thread(_collect)
 
