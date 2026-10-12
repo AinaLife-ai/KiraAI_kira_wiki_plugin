@@ -126,27 +126,75 @@ class KiraWikiPlugin(BasePlugin):
         self._registry[name] = str(path)
         self._save_registry()
 
+    def _resolve_llm_client(self, model_str: str):
+        """解析 "提供商:模型" 配置，两段都认「人类可读名」：
+
+        · 提供商：实例 ID 或 webui 显示名（3.0 起实例 ID 是 UUID，用户在界面上只看到显示名）
+        · 模型：内部稳定 ID，或按 2.x 习惯填的可读模型名（3.0 起可读名挪到 model_name）
+
+        3.0 rc.1 的框架解析只认「实例 ID:内部 ID」，这里补齐显示名一侧；
+        2.x 直传即可成功、不会走到反查分支，行为逐字不变。
+        """
+        try:
+            client = self.ctx.get_llm_client(model_str)
+            if client is not None:
+                return client
+        except Exception:
+            pass
+        if ":" not in (model_str or ""):
+            return None
+        pid_raw, mid_raw = (s.strip() for s in model_str.split(":", 1))
+        if not pid_raw or not mid_raw:
+            return None
+        pm = getattr(self.ctx, "provider_mgr", None)
+        if pm is None:
+            return None
+
+        # 1) 服务商：实例 ID 直查 → 显示名精确 → 去空白精确 → 包含（多候选取名字最短的）
+        real_pid = pid_raw if pm.get_provider(pid_raw) is not None else None
+        if real_pid is None:
+            try:
+                providers = pm.get_all_providers() or {}
+            except Exception:
+                providers = {}
+            key = re.sub(r"\s+", "", pid_raw)
+            cands = []
+            for pid, prov in providers.items():
+                name = (getattr(prov, "provider_name", "") or "").strip()
+                if not name:
+                    continue
+                name_norm = re.sub(r"\s+", "", name)
+                if name == pid_raw:
+                    score = 0
+                elif key and name_norm == key:
+                    score = 1
+                elif key and (key in name_norm or name_norm in key):
+                    score = 2
+                else:
+                    continue
+                cands.append((score, len(name), pid))
+            if cands:
+                cands.sort()
+                real_pid = cands[0][2]
+        if real_pid is None:
+            logger.warning(
+                "[kira-wiki] 找不到服务商 %r（可填 webui 显示名或实例 ID），已回退默认 LLM", pid_raw)
+            return None
+
+        # 2) 模型：内部 ID 直查 → 该服务商下按可读名（model_name）反查
+        if pm.get_model_info(real_pid, mid_raw, "llm") is not None:
+            return self.ctx.get_llm_client(f"{real_pid}:{mid_raw}")
+        for mi in (pm.get_model_infos(real_pid) or []):
+            if getattr(mi, "model_name", None) == mid_raw and getattr(mi, "model_id", None):
+                return self.ctx.get_llm_client(f"{real_pid}:{mi.model_id}")
+        logger.warning("[kira-wiki] 服务商 %r 下找不到模型 %r，已回退默认 LLM", real_pid, mid_raw)
+        return None
+
     async def _llm(self, prompt: str, system: str = "") -> str:
+        # 配置了解析不出来时回退默认 LLM（此前会变成 None 后直接返回空串，表现为"功能静默失效"）
         client = self.ctx.get_default_llm_client()
         if self.llm_model:
-            try:
-                client = self.ctx.get_llm_client(self.llm_model)
-            except Exception:
-                pass
-            if client is None and ":" in self.llm_model:
-                # 3.0 兼容：用户按 2.x 习惯填「提供商:可读名」；rc1 起新模型的可读名直传解析不到
-                # —— 按 model_name 反查内部 ID 再试。2.x 直传即成功，不进此分支。
-                try:
-                    _pid, _mid = self.llm_model.split(":", 1)
-                    pm = getattr(self.ctx, "provider_mgr", None)
-                    for mi in (pm.get_model_infos(_pid) if pm else []) or []:
-                        if getattr(mi, "model_name", None) == _mid and getattr(mi, "model_id", None):
-                            client = self.ctx.get_llm_client(f"{_pid}:{mi.model_id}")
-                            break
-                except Exception:
-                    pass
-        if client is None:
-            return ""
+            client = self._resolve_llm_client(self.llm_model) or client
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
