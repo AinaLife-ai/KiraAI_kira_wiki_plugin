@@ -343,6 +343,20 @@ def main() -> int:
     sentinel = json.loads((PLUGIN_ROOT / "manifest.json").read_text("utf-8"))
     check("manifest 版本 >= 1.2.0", tuple(int(x) for x in sentinel["version"].split(".")) >= (1, 2, 0),
           sentinel["version"])
+    # 面板（体检/问答）的闭合态：只写 translateY(104%) 时，因为 .sheet 是 bottom:40px 定位，
+    # 头部会残留约 27px 在屏幕底边 —— 那一截正好带 ×，用户会以为「面板关不掉、点了没反应」。
+    import re as _re
+    css = (PLUGIN_ROOT / "web" / "style.css").read_text("utf-8")
+    _m = _re.search(r"\.sheet\{(.*?)\}", css, _re.S)
+    sheet_closed = _m.group(1) if _m else ""
+    check("sheet 闭合态：位移须为 calc(100% + Npx)（纯 100% 不足以移出 bottom:40px）",
+          bool(_re.search(r"translate\(-50%,calc\(100% \+ \d+px\)\)", sheet_closed)),
+          sheet_closed[:80])
+    check("sheet 闭合态：opacity:0", "opacity:0" in sheet_closed)
+    check("sheet 闭合态：visibility:hidden", "visibility:hidden" in sheet_closed)
+    check("sheet 闭合态：pointer-events:none（不会截走点击）",
+          "pointer-events:none" in sheet_closed)
+
     html = (PLUGIN_ROOT / "web" / "index.html").read_text("utf-8")
     for asset in ("style.css", "graph.js", "app.js"):
         check(f"{asset} 带版本查询串（防静态资源缓存）",
