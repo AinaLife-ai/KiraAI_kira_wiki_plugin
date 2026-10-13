@@ -185,7 +185,7 @@ def main() -> int:
     for name, meta in comp.tools.items():
         budget += len(name) + len(meta.get("description", "")) + len(
             _json.dumps(meta.get("parameters") or {}, ensure_ascii=False, separators=(",", ":"))) + 12
-    check("工具 schema 总量 <= 1700 字符（v1.3.0 实测 1585）", budget <= 1700, f"实际 {budget}")
+    check("工具 schema 总量 <= 1600 字符（v1.4.0 实测 1566）", budget <= 1600, f"实际 {budget}")
     page = f"/page/plugin/{PLUGIN_NAME}/index/"
     check("页面路由已挂载", client.get(page).status_code in (200, 307, 401))
     r = client.get(f"{base}/library")
@@ -314,6 +314,30 @@ def main() -> int:
     check("空查询返回空命中", client.get(f"{base}/search", params={"q": " "}).json()["hits"] == [])
     picked, meta = wc.rank_pages(Path(vault), "计划", top_k=1)
     check("rank_pages 遵守 top_k", len(picked) <= 1, str(meta))
+
+    print("\n[9.5] wiki_query 的 ask 参数：纯检索 vs 模型合成")
+    base_calls = _FakeLLM.calls
+    out = loop.run_until_complete(
+        tools["wiki_query"](event=None, question="计划", ask=False, kw_name="vault"))
+    check("ask=false ⇒ 零模型调用", _FakeLLM.calls == base_calls,
+          f"{base_calls} -> {_FakeLLM.calls}")
+    check("ask=false ⇒ 返回命中列表（含 score）", "检索「计划」" in out and "[score" in out, out[:200])
+    check("ask=false ⇒ 提示用 wiki_read 钻取", 'wiki_read(ref=' in out, out[:220])
+    out2 = loop.run_until_complete(
+        tools["wiki_query"](event=None, question="计划", kw_name="vault"))
+    check("默认 ask=true ⇒ 会调模型", _FakeLLM.calls > base_calls,
+          f"{base_calls} -> {_FakeLLM.calls}")
+    out3 = loop.run_until_complete(
+        tools["wiki_query"](event=None, question="绝不存在的检索词zzz", ask=False, kw_name="vault"))
+    check("未命中 ⇒ 说明库里有几个可检索页", "没有命中" in out3 and "可检索页面" in out3, out3[:180])
+    out4 = loop.run_until_complete(
+        tools["wiki_query"](event=None, question="   ", ask=False, kw_name="vault"))
+    check("空 question 被拒", "需要给 question" in out4, out4[:120])
+    r = client.post(f"{base}/query", json={"kw": "vault", "question": "计划", "ask": False})
+    j = r.json()
+    check("面板 /query 支持 ask=false（返回 hits）",
+          r.status_code == 200 and j.get("ask") is False and isinstance(j.get("hits"), list),
+          str(j)[:150])
 
     print("\n[10] 版本与清单")
     sentinel = json.loads((PLUGIN_ROOT / "manifest.json").read_text("utf-8"))

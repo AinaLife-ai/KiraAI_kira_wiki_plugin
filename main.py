@@ -15,6 +15,7 @@ Structure:
 v1.3.0
   · 工具精简 7 → 4（write / read / ingest / query）——每轮请求注入的 schema 少 ~32%
   · bot 可自写：wiki_write 支持 replace / append / delete / init，全程零模型调用
+  · wiki_query 可纯检索（ask=false）：零模型调用，返回紧凑命中列表，细节用 wiki_read 钻取
   · 只读操作绝不落盘；外部笔记（已有 Obsidian 库）与生成区一同进图谱与检索
   · 全部磁盘操作移出事件循环（asyncio.to_thread）
   · 侧边栏面板：自举引导 / 库切换 / 晶格视图 / 阅读 / 热编辑 / 体检 / 问答
@@ -512,17 +513,17 @@ class KiraWikiPlugin(BasePlugin):
 
     @register.tool(
         name="wiki_write",
-        description="写知识库（内容自己写，不调模型）：写入/追加/删除页面，或初始化、接管知识库目录。",
+        description="写知识库页面，或建库/接管目录（内容由自己写，不调模型）。",
         params={
             "type": "object",
             "properties": {
                 "mode": {"type": "string", "enum": ["replace", "append", "delete", "init"],
-                         "description": "replace=整页覆盖(默认) | append=追加页尾 | delete=删页 | init=建库/接管目录"},
-                "rel": {"type": "string", "description": "页面相对路径：生成区用 entities|concepts|sources|analyses/名.md；你自己的笔记直接 名.md 或 目录/名.md（同样可写）。delete 可只给标题"},
-                "content": {"type": "string", "description": "markdown 正文（replace/append 必填）；生成区建议带 [[wikilink]]"},
-                "path": {"type": "string", "description": "仅 init：知识库根目录，省略=默认 data/kw（自建；指向已有 vault 会一并载入其笔记）"},
-                "name": {"type": "string", "description": "仅 init：知识库名，省略取目录名"},
-                "kw_name": {"type": "string", "description": "知识库名，留空用默认"},
+                         "description": "replace 覆盖(默认)/append 追加/delete 删页/init 建库或接管"},
+                "rel": {"type": "string", "description": "页面路径：生成区 sources|entities|concepts|analyses/名.md；自己的笔记 名.md（含子目录）同样可写；delete 可给标题"},
+                "content": {"type": "string", "description": "markdown 正文（replace/append 必填），带 [[wikilink]] 更好"},
+                "path": {"type": "string", "description": "仅 init：库根目录，省略=默认 data/kw（指向已有 vault 会载入其笔记）"},
+                "name": {"type": "string", "description": "仅 init：库名，省略取目录名"},
+                "kw_name": {"type": "string", "description": "库名，留空=默认"},
             },
             "required": ["mode"],
         },
@@ -564,13 +565,13 @@ class KiraWikiPlugin(BasePlugin):
 
     @register.tool(
         name="wiki_read",
-        description="读知识库：给 ref 读该页完整正文；不给 ref 列全部页面与统计，check=true 顺带体检。改页前先读原文。",
+        description="读知识库：给 ref 读全文；不给则列页面与统计，check=true 顺带体检。改页前先读。",
         params={
             "type": "object",
             "properties": {
-                "ref": {"type": "string", "description": "页面相对路径或标题；留空=列目录+统计"},
-                "check": {"type": "boolean", "description": "列目录时是否做完整体检，默认 false"},
-                "kw_name": {"type": "string", "description": "知识库名，留空用默认"},
+                "ref": {"type": "string", "description": "页面路径或标题；留空=列目录"},
+                "check": {"type": "boolean", "description": "列目录时顺带体检，默认 false"},
+                "kw_name": {"type": "string", "description": "库名，留空=默认"},
             },
             "required": [],
         },
@@ -583,14 +584,14 @@ class KiraWikiPlugin(BasePlugin):
 
     @register.tool(
         name="wiki_ingest",
-        description="收录素材：原文写进 raw/，并用生成模型编译摘要/实体/概念/分析页；模型不可用时只存 raw 并提示改用 wiki_write。",
+        description="收录素材到 raw/，并用生成模型编译摘要/实体/概念/分析页（模型不可用时只存 raw）。",
         params={
             "type": "object",
             "properties": {
                 "content": {"type": "string", "description": "素材正文"},
-                "title": {"type": "string", "description": "素材标题，用于命名文件"},
-                "kw_name": {"type": "string", "description": "知识库名，留空用默认"},
-                "source_url": {"type": "string", "description": "来源链接（可选）"},
+                "title": {"type": "string", "description": "素材标题，用作文件名"},
+                "kw_name": {"type": "string", "description": "库名，留空=默认"},
+                "source_url": {"type": "string", "description": "来源链接，可选"},
             },
             "required": ["content", "title"],
         },
@@ -674,25 +675,52 @@ class KiraWikiPlugin(BasePlugin):
                 f"raw/{slug}.md + wiki 生成 {written} 个页面{capped}（摘要/实体/概念/分析），索引现有 {count} 页\n"
                 f"面板或 Obsidian 里刷新即可看到")
 
+    async def _search_hits(self, kw: Path, question: str) -> str:
+        """纯检索（wiki_query ask=false / 面板 /search 同源）：紧凑命中列表。"""
+        hits, meta = await wc.to_thread(
+            wc.rank_pages, kw, question, top_k=12, per_page_chars=300)
+        if not hits:
+            pages = await wc.to_thread(wc.iter_pages, kw)
+            n = sum(1 for p in pages if p.section != "root")
+            if n == 0:
+                return "知识库里还没有可检索页面（根页不参与检索），先收录素材或用 wiki_write 写页"
+            return (f"没有命中「{question}」（库里共 {n} 个可检索页面）。"
+                    f"换个词试试，或用 wiki_read 不带 ref 看全部页面")
+        lines = [f"检索「{question}」命中 {len(hits)} 页（候选 {meta['candidates']} 页）："]
+        for i, h in enumerate(hits, 1):
+            where = " · 外部笔记" if h.get("origin") == wc.ORIGIN_VAULT else ""
+            snippet = " ".join(h["text"][:200].split())
+            lines.append(f"{i}. {h['rel']} · {h['title']}{where} [score {h['score']}]\n"
+                         f"   {snippet}")
+        lines.append("需要全文就用 wiki_read(ref=\"<上面的 rel>\")。")
+        return "\n".join(lines)
+
     @register.tool(
         name="wiki_query",
-        description="检索知识库并回答问题，标注来源页面；模型不可用时返回命中的原文片段。",
+        description="检索知识库：默认用生成模型写带出处的答案；ask=false 只返回片段。",
         params={
             "type": "object",
             "properties": {
-                "question": {"type": "string", "description": "要问的问题"},
-                "kw_name": {"type": "string", "description": "知识库名，留空用默认"},
+                "question": {"type": "string", "description": "问题或检索词"},
+                "ask": {"type": "boolean", "description": "true(默认)=让模型写答案；false=只返回片段(不调模型)"},
+                "kw_name": {"type": "string", "description": "库名，留空=默认"},
             },
             "required": ["question"],
         },
     )
     async def wiki_query(self, event: KiraMessageBatchEvent, question: str,
-                         kw_name: str = "") -> str:
+                         ask: bool = True, kw_name: str = "") -> str:
         if self._disabled():
             return self._disabled_msg()
         kw = self._get_kw(kw_name)
         if kw is None:
             return "还没有知识库，先初始化一个"
+        if not (question or "").strip():
+            return "需要给 question（检索词或问题）"
+        # 纯检索：零模型调用，返回紧凑命中列表（多条 × 短片段），
+        # 细节交给 wiki_read 钻取 —— 既不花模型钱，也不撑爆 bot 的主上下文。
+        if not ask:
+            return await self._search_hits(kw, question)
         picked, meta = await wc.to_thread(wc.rank_pages, kw, question)
         if not picked:
             return "知识库里还没有可用页面，先收录点素材"
@@ -944,6 +972,14 @@ class KiraWikiPlugin(BasePlugin):
         question = ((body or {}).get("question") or "").strip()
         if not question:
             return {"ok": False, "error": "question required"}
+        if (body or {}).get("ask") is False:
+            hits, meta = await wc.to_thread(
+                wc.rank_pages, kw, question, top_k=12, per_page_chars=400)
+            return {"ok": True, "ask": False,
+                    "hits": [{"rel": p["rel"], "title": p["title"], "section": p["section"],
+                              "origin": p.get("origin", ""), "score": p["score"],
+                              "snippet": p["text"][:400]} for p in hits],
+                    "meta": meta, "sources": []}
         picked, meta = await wc.to_thread(wc.rank_pages, kw, question)
         if not picked:
             return {"ok": False, "error": "no_pages"}
