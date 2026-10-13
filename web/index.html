@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-store">
 <title>Kira Wiki · 知识晶格</title>
-<link rel="stylesheet" href="style.css?v=1.4.1">
+<link rel="stylesheet" href="style.css?v=1.5.0">
 <script>
   /* 主题在首帧之前定下来，避免闪白；尊重系统偏好 */
   (function () {
@@ -48,6 +48,8 @@
     <g id="i-clock"><circle cx="12" cy="12" r="10"/><path d="M12 7v5l3 2"/></g>
     <g id="i-scroll"><path d="M12 15V3"/><path d="m8 7 4-4 4 4"/><path d="M20 21H4a2 2 0 0 1 0-4h16"/></g>
     <g id="i-tag"><path d="M12.6 2.6A2 2 0 0 1 14 2h6a2 2 0 0 1 2 2v6a2 2 0 0 1-.6 1.4l-8.4 8.4a2 2 0 0 1-2.8 0l-6-6a2 2 0 0 1 0-2.8Z"/><path d="M17 7h.01"/></g>
+    <g id="i-caret"><path d="m6 9 6 6 6-6"/></g>
+    <g id="i-gear"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></g>
     <g id="i-max"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></g>
   </defs>
 </svg>
@@ -104,19 +106,28 @@
   <section class="deck" data-reveal>
     <div class="hud">
       <button class="icobtn" id="btnSearch" title="搜索 (/)"><svg viewBox="0 0 24 24"><use href="#i-search"/></svg></button>
-      <button class="modelchip" id="modelChip" title="当前生成模型（在插件设置里下拉选择）">
-        <svg viewBox="0 0 24 24"><use href="#i-sparkle"/></svg>
-        <span class="mc-label" id="modelLabel">默认 LLM</span>
-      </button>
+      <div class="modelpick">
+        <button class="modelchip" id="modelChip" title="点开选择生成 / 问答所用模型（选中即生效）">
+          <svg viewBox="0 0 24 24"><use href="#i-sparkle"/></svg>
+          <span class="mc-label" id="modelLabel">默认 LLM</span>
+          <svg class="mc-caret" viewBox="0 0 24 24"><use href="#i-caret"/></svg>
+        </button>
+        <div class="menu" id="modelMenu" hidden>
+          <div class="menu-head"><span>生成 / 问答模型</span><span>选中即生效</span></div>
+          <div class="menu-list" id="modelList"></div>
+        </div>
+      </div>
       <div class="kbpick" id="kbPickWrap" hidden>
         <svg viewBox="0 0 24 24"><use href="#i-library"/></svg>
         <select id="kbPicker" title="切换知识库"></select>
       </div>
-      <input id="searchInput" class="search" type="search" placeholder="搜索页面 / 实体 / 概念…" spellcheck="false" autocomplete="off">
+      <input id="searchInput" class="search" type="search" placeholder="搜索页面 / 实体 / 概念…（回车＝提问）" spellcheck="false" autocomplete="off">
+      <button class="llmtoggle" id="llmToggle" aria-pressed="true" title="检索时是否调用 LLM 生成答案：关掉＝只返回命中页">LLM</button>
       <div class="hud-spacer"></div>
       <button class="icobtn" id="btnAsk" title="问知识库 (A)"><svg viewBox="0 0 24 24"><use href="#i-sparkle"/></svg></button>
       <button class="icobtn" id="btnLint" title="体检 (L)"><svg viewBox="0 0 24 24"><use href="#i-pulse"/></svg></button>
       <button class="icobtn" id="btnReindex" title="重建索引 (G)"><svg viewBox="0 0 24 24"><use href="#i-refresh"/></svg></button>
+      <button class="icobtn" id="btnSettings" title="设置 (S)"><svg viewBox="0 0 24 24"><use href="#i-gear"/></svg></button>
       <button class="icobtn" id="btnNew" title="新建页面 (N)"><svg viewBox="0 0 24 24"><use href="#i-plus"/></svg></button>
       <button class="icobtn" id="btnTheme" title="切换主题"><svg viewBox="0 0 24 24"><use href="#i-moon"/></svg></button>
     </div>
@@ -222,7 +233,7 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="graph.js?v=1.4.1"></script>
-<script src="app.js?v=1.4.1"></script>
+<script src="graph.js?v=1.5.0"></script>
+<script src="app.js?v=1.5.0"></script>
 </body>
 </html>

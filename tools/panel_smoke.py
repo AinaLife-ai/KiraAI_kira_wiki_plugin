@@ -339,6 +339,71 @@ def main() -> int:
           r.status_code == 200 and j.get("ask") is False and isinstance(j.get("hits"), list),
           str(j)[:150])
 
+    print("\n[9.8] 设置 API：面板内改 + 热生效 + 框架配置作为同步镜像")
+    r = client.get(f"{base}/settings")
+    st = r.json()
+    check("/settings 200", r.status_code == 200, r.text[:120])
+    check("返回 4 个设置项", all(k in st for k in
+          ("enabled", "default_kw_path", "model", "max_pages_per_ingest")), str(list(st))[:120])
+    check("返回 revision（乐观并发用）", bool(st.get("revision")), str(st.get("revision")))
+    check("返回 models 列表字段", isinstance(st.get("models"), list), str(type(st.get("models"))))
+    rev = st["revision"]
+
+    # ① 热生效：改 default_kw_path / max_pages —— 不改配置文件的情况下立刻影响本进程行为
+    new_path = str(work / "kb-set")
+    r = client.post(f"{base}/settings", json={"revision": rev, "default_kw_path": new_path,
+                                              "max_pages_per_ingest": 7})
+    check("保存设置 200", r.status_code == 200, r.text[:150])
+    check("default_kw_path 立即生效", inst.default_kw_path == new_path,
+          f"{inst.default_kw_path}")
+    check("max_pages 立即生效", inst.max_pages == 7, str(inst.max_pages))
+    check("返回新 revision", r.json().get("revision") and r.json()["revision"] != rev)
+
+    # ② 落盘 + 宿主内存同步（= 框架插件设置页看到的就是这份）
+    cfg_path = Path(data) / "config" / "plugins" / f"{PLUGIN_NAME}.json"
+    on_disk = json.loads(cfg_path.read_text("utf-8"))
+    check("已原子落盘到配置文件", on_disk["section_basic"]["default_kw_path"] == new_path,
+          str(on_disk.get("section_basic"))[:120])
+    host = mgr.plugin_configs.get(PLUGIN_NAME, {})
+    check("宿主 plugin_configs 同步（设置页不会看到旧值）",
+          host.get("section_basic", {}).get("default_kw_path") == new_path,
+          str(host.get("section_basic"))[:120])
+    check("plugin_cfg 与宿主内存是同一份", host is inst.plugin_cfg or host == inst.plugin_cfg)
+
+    # ③ enabled=false 也能读设置（否则关掉就再也打不开了）
+    inst.enabled = False
+    check("停用后 /settings 仍可读", client.get(f"{base}/settings").status_code == 200)
+    inst.enabled = True
+
+    # ④ 参数校验
+    bad = client.post(f"{base}/settings", json={"max_pages_per_ingest": 0})
+    check("页数越界被拒 400", bad.status_code == 400, bad.text[:120])
+    # 注意：前面为了让 ingest/query 能跑，给 ctx.get_llm_client 打了「任何模型都返回客户端」的桩；
+    # 这里先摘掉，才是在验证真实的「模型解析失败要拒绝」路径。
+    _orig_client = inst.ctx.get_llm_client
+    inst.ctx.get_llm_client = lambda *a, **k: None
+    bad2 = client.post(f"{base}/settings", json={"model": "不存在:模型"})
+    inst.ctx.get_llm_client = _orig_client
+    check("模型不可用被拒 400", bad2.status_code == 400, bad2.text[:120])
+    conflict = client.post(f"{base}/settings", json={"revision": "stale-rev", "enabled": True})
+    check("revision 过期 ⇒ 409（防互相覆盖）", conflict.status_code == 409, conflict.text[:120])
+    check("校验失败没有改坏配置", inst.max_pages == 7, str(inst.max_pages))
+
+    # ⑤ 反向同步：在「框架插件设置页」改 ⇒ 插件被重建并读到新值（两边都能改）
+    host_path = str(work / "kb-host")
+    loop.run_until_complete(mgr.update_plugin_config(
+        PLUGIN_NAME, {"section_basic": {"enabled": True, "default_kw_path": host_path},
+                      "section_llm": {"model": "", "max_pages_per_ingest": 9}}))
+    inst = mgr.plugin_instances.get(PLUGIN_NAME)
+    check("框架设置页改动 ⇒ 插件重建并读到新值",
+          inst is not None and inst.default_kw_path == host_path,
+          getattr(inst, "default_kw_path", "无实例"))
+    check("框架设置页改动 ⇒ max_pages 同步", getattr(inst, "max_pages", None) == 9,
+          str(getattr(inst, "max_pages", None)))
+    check("面板再读也是新值（双向一致）",
+          client.get(f"{base}/settings").json().get("default_kw_path") == host_path,
+          client.get(f"{base}/settings").text[:120])
+
     print("\n[10] 版本与清单")
     sentinel = json.loads((PLUGIN_ROOT / "manifest.json").read_text("utf-8"))
     check("manifest 版本 >= 1.2.0", tuple(int(x) for x in sentinel["version"].split(".")) >= (1, 2, 0),

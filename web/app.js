@@ -20,11 +20,16 @@
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  const LLM_KEY = "kw-llm";
   const state = {
     kw: "", lib: null, tree: null, graph: null, origin: "wiki",
-    current: null, dirty: false, mode: "read", filter: null, lastErr: ""
+    current: null, dirty: false, mode: "read", filter: null, lastErr: "",
+    settings: null, models: [], rev: "", useLlm: true
   };
-  try { state.kw = localStorage.getItem(KW_KEY) || ""; } catch (e) { /* 隐私模式 */ }
+  try {
+    state.kw = localStorage.getItem(KW_KEY) || "";
+    state.useLlm = (localStorage.getItem(LLM_KEY) || "1") !== "0";
+  } catch (e) { /* 隐私模式 */ }
 
   async function api(path, opts) {
     const ctl = new AbortController();
@@ -216,7 +221,7 @@
     const m = (state.lib && state.lib.model) || null;
     if (!chip || !lab) return;
     if (!m) { lab.textContent = "默认 LLM"; chip.classList.remove("warn"); return; }
-    lab.textContent = m.label || (m.value ? m.value : "默认 LLM");
+    lab.textContent = m.value ? (m.short || m.label || m.value) : "默认 LLM";
     const bad = m.value && !m.ok;
     chip.classList.toggle("warn", !!bad);
     chip.title = bad
@@ -383,7 +388,8 @@
   function openSheet(kind) {
     $("sheet").classList.add("open");
     $("sheet").setAttribute("aria-hidden", "false");
-    $("sheetKind").textContent = kind === "lint" ? "体检 / LINT" : "问答 / ASK";
+    $("sheetKind").textContent = kind === "lint" ? "体检 / LINT"
+      : kind === "settings" ? "设置 / SETTINGS" : "问答 / ASK";
     $("sheetBody").innerHTML = `<p class="meta">正在${kind === "lint" ? "扫描" : "检索"}…</p>`;
     return kind;
   }
@@ -408,48 +414,192 @@
     } catch (e) { $("sheetBody").innerHTML = `<p class="meta">体检失败：${esc(e.message)}</p>`; }
   }
 
-  function runAsk() {
+  /* LLM 勾选：搜索/问答是否调用生成模型（关掉＝纯检索，零模型调用） */
+  function setLlm(on) {
+    state.useLlm = !!on;
+    try { localStorage.setItem(LLM_KEY, state.useLlm ? "1" : "0"); } catch (e) {}
+    const t = $("llmToggle");
+    if (t) { t.classList.toggle("on", state.useLlm); t.setAttribute("aria-pressed", state.useLlm ? "true" : "false"); }
+    const cb = $("askLlm");
+    if (cb) cb.checked = state.useLlm;
+  }
+
+  function openAsk(prefill) {
     openSheet("ask");
     $("sheetBody").innerHTML = `
       <div class="askbar">
-        <input id="askInput" placeholder="向知识库提问，例如：Z 插件的记忆分层是怎么设计的？" spellcheck="false">
+        <input id="askInput" placeholder="向知识库提问，例如：Z 插件的记忆分层是怎么设计的？" spellcheck="false" value="${esc(prefill || "")}">
         <button class="icobtn" id="askGo" title="提问"><svg viewBox="0 0 24 24"><use href="#i-arrow"/></svg></button>
       </div>
+      <label class="askllm"><input type="checkbox" id="askLlm"${state.useLlm ? " checked" : ""}>
+        用 LLM 生成答案（取消勾选＝只返回命中页，不调模型）</label>
       <div id="askOut"><p class="meta">回车提问 · 回答会标注参考页面</p></div>`;
-    const go = async () => {
-      const q = $("askInput").value.trim();
-      if (!q) return;
-      $("askOut").innerHTML = `<p class="meta">检索并生成回答…</p>`;
-      try {
-        const r = await api("/query", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: q, kw: state.kw })
-        });
-        if (!r.ok) {
-          if (r.error === "llm_unavailable" && r.hits && r.hits.length) {
-            const hits = r.hits.map(h => `<button data-rel="${esc(h.rel)}" data-origin="${esc(h.origin || "")}">${esc(h.title)} · ${h.score}</button>`).join("");
-            $("askOut").innerHTML = `<p class="meta">生成模型不可用，以下是检索到的原文片段：</p>` +
-              r.hits.map(h => `<div class="answer">${esc(h.snippet)}</div>`).join("") +
-              `<div class="src">${hits}</div>`;
-            $("askOut").querySelectorAll(".src button").forEach(b =>
-              b.onclick = () => loadPage(b.dataset.rel, b.dataset.origin));
-            return;
-          }
-          const msg = r.error === "no_pages" ? "知识库里还没有可用页面" : ("未能回答（" + esc(r.error) + "）");
-          $("askOut").innerHTML = `<p class="meta">${msg}</p>`;
-          return;
-        }
-        const src = (r.sources || []).map(s => `<button data-rel="${esc(s.rel)}">${esc(s.title)} · ${s.score}</button>`).join("");
-        $("askOut").innerHTML = `<div class="answer">${esc(r.answer)}</div>
-          <div class="meta" style="margin-top:14px">参考页面 ${(r.sources || []).length} · 候选 ${r.meta.candidates} · 取用 ${r.meta.chars} 字</div>
-          <div class="src">${src}</div>`;
-        $("askOut").querySelectorAll(".src button").forEach(b => b.onclick = () => loadPage(b.dataset.rel));
-      } catch (e) { $("askOut").innerHTML = `<p class="meta">提问失败：${esc(e.message)}</p>`; }
-    };
-    $("askGo").onclick = go;
-    $("askInput").addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+    $("askGo").onclick = () => runQuery($("askInput").value);
+    $("askInput").addEventListener("keydown", e => { if (e.key === "Enter") runQuery($("askInput").value); });
+    $("askLlm").addEventListener("change", e => setLlm(e.target.checked));
     setTimeout(() => $("askInput") && $("askInput").focus(), 260);
+    if (prefill) runQuery(prefill);
   }
+
+  async function runQuery(raw) {
+    const q = String(raw || "").trim();
+    if (!q) return;
+    if (!$("askOut")) { openAsk(q); return; }
+    $("askOut").innerHTML = `<p class="meta">${state.useLlm ? "检索并生成回答…" : "检索中（未调用 LLM）…"}</p>`;
+    try {
+      const r = await api("/query", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q, kw: state.kw, ask: state.useLlm })
+      });
+      renderQueryResult(r);
+    } catch (e) { $("askOut").innerHTML = `<p class="meta">查询失败：${esc(e.message)}</p>`; }
+  }
+
+  function renderQueryResult(r) {
+    const out = $("askOut");
+    if (!out) return;
+    if (r && r.ask === false) { renderHits(out, r.hits || [], `命中 ${(r.hits || []).length} 页 · 未调用 LLM`); return; }
+    if (!r || r.ok === false) {
+      if (r && r.error === "llm_unavailable") {
+        renderHits(out, r.hits || [], "生成模型不可用，先给你检索到的命中页");
+        return;
+      }
+      const msg = (r && r.error === "no_pages") ? "知识库里还没有可用页面" : ("未能回答（" + esc((r && r.error) || "未知") + "）");
+      out.innerHTML = `<p class="meta">${msg}</p>`;
+      return;
+    }
+    const src = (r.sources || []).map(s =>
+      `<button data-rel="${esc(s.rel)}">${esc(s.title)} · ${s.score}</button>`).join("");
+    out.innerHTML = `<div class="answer">${esc(r.answer)}</div>
+      <div class="meta" style="margin-top:14px">参考页面 ${(r.sources || []).length} · 候选 ${r.meta.candidates} · 取用 ${r.meta.chars} 字</div>
+      <div class="src">${src}</div>`;
+    out.querySelectorAll(".src button").forEach(b => b.onclick = () => loadPage(b.dataset.rel));
+  }
+
+  function renderHits(out, hits, title) {
+    if (!hits.length) { out.innerHTML = `<p class="meta">没有命中页面</p>`; return; }
+    out.innerHTML = `<div class="meta" style="margin-bottom:10px">${esc(title)}</div>` + hits.map((h, i) => `
+      <div class="hit" data-rel="${esc(h.rel)}" data-origin="${esc(h.origin || "")}">
+        <b>${i + 1}. ${esc(h.title || h.rel)}</b>
+        <span class="meta">${esc(h.rel)}${h.score != null ? " · score " + h.score : ""}</span>
+        <p>${esc(String(h.snippet || "").slice(0, 220))}</p>
+      </div>`).join("");
+    out.querySelectorAll(".hit").forEach(el =>
+      el.onclick = () => loadPage(el.dataset.rel, el.dataset.origin));
+  }
+
+  /* ───────────────── 设置：面板内改 + 热生效 ───────────────── */
+  async function loadSettings() {
+    state.settings = await api("/settings");
+    state.rev = state.settings.revision;
+    state.models = state.settings.models || [];
+    return state.settings;
+  }
+
+  async function savePartial(patch, okMsg) {
+    try {
+      const r = await api("/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch)
+      });
+      state.settings = r; state.rev = r.revision; state.models = r.models || state.models;
+      toast(okMsg || "已保存并生效");
+      await refresh();
+      return r;
+    } catch (e) {
+      if (/409/.test(e.message) || /已被别处改动/.test(e.message)) {
+        try { await loadSettings(); } catch (e2) {}
+        if ($("sheetKind") && $("sheetBody").querySelector(".setform")) renderSettings();
+        toast("配置已被别处改动，已刷新，请重试", true);
+        return null;
+      }
+      toast("保存失败：" + e.message, true);
+      return null;
+    }
+  }
+
+  async function openSettings() {
+    openSheet("settings");
+    $("sheetBody").innerHTML = `<p class="meta">正在读取设置…</p>`;
+    try { await loadSettings(); renderSettings(); }
+    catch (e) { $("sheetBody").innerHTML = `<p class="meta">读取设置失败：${esc(e.message)}</p>`; }
+  }
+
+  function renderSettings() {
+    const s = state.settings || {};
+    const models = state.models || [];
+    const opts = [`<option value="">KiraAI 默认 LLM</option>`].concat(
+      models.map(m => `<option value="${esc(m.id)}"${m.id === s.model ? " selected" : ""}>${esc(m.label)}</option>`));
+    if (s.model && !models.some(m => m.id === s.model)) {
+      opts.push(`<option value="${esc(s.model)}" selected>${esc(s.model)}（当前值 · 未在列表内）</option>`);
+    }
+    $("sheetBody").innerHTML = `
+      <div class="setform">
+        <label class="setrow"><span>启用插件</span>
+          <input type="checkbox" id="setEnabled"${s.enabled ? " checked" : ""}></label>
+        <label class="setrow"><span>默认知识库目录</span>
+          <input id="setPath" class="mono" spellcheck="false" autocomplete="off"
+                 value="${esc(s.default_kw_path || "")}" placeholder="${esc(s.default_path_hint || "data/kw")}"></label>
+        <label class="setrow"><span>生成 / 问答模型</span>
+          <select id="setModel">${opts.join("")}</select></label>
+        <label class="setrow"><span>单次收录最多页数</span>
+          <input id="setMax" type="number" min="1" max="200" value="${esc(String(s.max_pages_per_ingest || 15))}"></label>
+        <div class="setfoot">
+          <button class="kbs-btn primary" id="setSave">保存并立即生效</button>
+          <span class="set-hint">与「KiraAI 插件设置页」是同一份配置，两边都能改；在这里改完<b>立即生效，无需重启</b>。</span>
+        </div>
+        ${s.model_error ? `<p class="set-hint" style="color:var(--warn)">当前模型解析失败：${esc(s.model_error)}（已回退默认 LLM）</p>` : ""}
+      </div>`;
+    $("setSave").onclick = saveSettings;
+  }
+
+  async function saveSettings() {
+    const n = Number($("setMax").value || 15);
+    if (!Number.isFinite(n) || n < 1 || n > 200) { toast("单次收录页数需在 1–200 之间", true); return; }
+    const patch = {
+      revision: state.rev,
+      enabled: $("setEnabled").checked,
+      default_kw_path: $("setPath").value.trim(),
+      model: $("setModel").value,
+      max_pages_per_ingest: n
+    };
+    const before = state.settings || {};
+    const r = await savePartial(patch, "设置已保存并生效");
+    if (r) {
+      if (String(before.default_kw_path || "") !== String(r.default_kw_path || "")) state.kw = "";
+      renderSettings();
+    }
+  }
+
+  /* ───────────────── 模型下拉（顶栏芯片） ───────────────── */
+  async function openModelMenu() {
+    const menu = $("modelMenu");
+    if (!menu.hidden) { menu.hidden = true; return; }
+    if (!state.models.length) {
+      try { await loadSettings(); } catch (e) { /* 读不到就显示空列表 */ }
+    }
+    const cur = (state.lib && state.lib.model && state.lib.model.value) || "";
+    const items = [`<button class="menuitem${cur ? "" : " on"}" data-id=""><b>KiraAI 默认 LLM</b><span>跟随框架默认</span></button>`]
+      .concat((state.models || []).map(m =>
+        `<button class="menuitem${m.id === cur ? " on" : ""}" data-id="${esc(m.id)}">
+           <b>${esc(m.name)}</b><span>${esc(m.provider)}</span></button>`));
+    if (!(state.models || []).length) {
+      items.push(`<div class="menu-empty">没读到可用模型。检查 KiraAI 里是否配置了 LLM，或到「设置」里手动查看。</div>`);
+    }
+    $("modelList").innerHTML = items.join("");
+    $("modelList").querySelectorAll(".menuitem").forEach(el => {
+      el.onclick = async () => {
+        menu.hidden = true;
+        const id = el.dataset.id;
+        const label = el.querySelector("b") ? el.querySelector("b").textContent : "";
+        const r = await savePartial({ revision: state.rev, model: id },
+          id ? `已切换到模型：${label}` : "已改回 KiraAI 默认 LLM");
+        if (r) renderModel();
+      };
+    });
+    menu.hidden = false;
+  }
+
 
   /* ───────────────── 搜索 ───────────────── */
   let searchTimer = null;
@@ -582,7 +732,18 @@
     $("btnSearch").onclick = () => $("searchInput").focus();
     $("searchInput").addEventListener("input", onSearchInput);
     $("btnLint").onclick = runLint;
-    $("btnAsk").onclick = runAsk;
+    $("btnAsk").onclick = () => openAsk("");
+    $("btnSettings").onclick = openSettings;
+    $("llmToggle").onclick = () => setLlm(!state.useLlm);
+    setLlm(state.useLlm);
+    $("modelChip").onclick = (e) => { e.stopPropagation(); openModelMenu(); };
+    $("searchInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); openAsk($("searchInput").value.trim()); }
+    });
+    document.addEventListener("click", (e) => {
+      const wrap = document.querySelector(".modelpick");
+      if (wrap && !wrap.contains(e.target)) $("modelMenu").hidden = true;
+    });
     $("btnReindex").onclick = async () => {
       try {
         const r = await api("/index/rebuild", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kw: state.kw }) });
@@ -680,7 +841,8 @@
       if (k === "/") { e.preventDefault(); $("searchInput").focus(); }
       else if (k === "e" && state.current) setMode(state.mode === "edit" ? "read" : "edit");
       else if (k === "l") runLint();
-      else if (k === "a") runAsk();
+      else if (k === "a") openAsk("");
+      else if (k === "s") openSettings();
       else if (k === "g") $("btnReindex").click();
       else if (k === "n") $("btnNew").click();
       else if (e.key === "Escape") { closeSheet(); closeDrawer(); }
