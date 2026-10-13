@@ -12,11 +12,12 @@ Structure:
         index.md  log.md  overview.md  conventions.md
         sources/ entities/ concepts/ analyses/
 
-v1.1.0
-  · 工具精简 5 → 4（wiki_list + wiki_lint 合并为 wiki_status）
+v1.3.0
+  · 工具精简 7 → 4（write / read / ingest / query）——每轮请求注入的 schema 少 ~32%
+  · bot 可自写：wiki_write 支持 replace / append / delete / init，全程零模型调用
+  · 只读操作绝不落盘；外部笔记（已有 Obsidian 库）与生成区一同进图谱与检索
   · 全部磁盘操作移出事件循环（asyncio.to_thread）
-  · 检索改为关键词排序 + 预算裁剪（不再把整库塞进 prompt）
-  · 侧边栏面板：晶格视图 / 页面阅读 / 热编辑 / 体检 / 问答
+  · 侧边栏面板：自举引导 / 库切换 / 晶格视图 / 阅读 / 热编辑 / 体检 / 问答
 """
 from __future__ import annotations
 
@@ -419,21 +420,12 @@ class KiraWikiPlugin(BasePlugin):
     # 工具（4 个：init / ingest / query / status）
     # ==================================================================
 
-    @register.tool(
-        name="wiki_init",
-        description="初始化/接管知识库：创建 raw/ 与 wiki/ 目录结构并注册。用户说'建知识库/初始化wiki/用某个目录当知识库'时调用。path 可省略（用插件设置里的默认路径）。",
-        params={
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "知识库名称（用于注册与后续引用；省略则取目录名）"},
-                "path": {"type": "string", "description": "知识库根目录（Obsidian vault 目录）；可省略，默认用设置的默认路径（data/kw）。指向已有 vault 时，里面的笔记会一并载入，可读可写"},
-            },
-            "required": [],
-        },
-    )
-    async def wiki_init(self, event: KiraMessageBatchEvent, name: str = "", path: str = "") -> str:
-        if self._disabled():
-            return self._disabled_msg()
+    # ------------------------------------------------------------------
+    # 工具实现（4 个：write / read / ingest / query）
+    # ------------------------------------------------------------------
+
+    async def _tool_init(self, path: str = "", name: str = "") -> str:
+        """建库 / 接管目录（wiki_write mode=init）。"""
         kw = self._ensure_kb_path(path)
         name = (name or "").strip() or self._guess_kw_name(kw)
         try:
@@ -453,94 +445,63 @@ class KiraWikiPlugin(BasePlugin):
                 f"目录：raw/（素材） + wiki/（生成区，{n} 个页面位）{extra}\n"
                 f"用 Obsidian 打开 {kw} 即可浏览图谱")
 
-    @register.tool(
-        name="wiki_write",
-        description="直接写入/新建知识库页面——内容由你自己写，不调用其它模型。用户说'把这个记进知识库/帮我写一页/改一下那页'时调用；wiki_ingest 的生成模型不可用时也用它自己整理。",
-        params={
-            "type": "object",
-            "properties": {
-                "rel": {"type": "string", "description": "页面相对路径：生成区用 entities/某某.md、concepts/某某.md、sources/某某.md、analyses/某某.md；用户已有笔记直接写 我的笔记.md 或 项目/计划.md"},
-                "content": {"type": "string", "description": "完整 markdown 正文（可含 frontmatter）；生成区建议带 [[wikilink]] 交叉引用"},
-                "mode": {"type": "string", "enum": ["replace", "append"], "description": "replace=整页覆盖（默认）；append=追加到页尾"},
-                "kw_name": {"type": "string", "description": "知识库名称，留空用默认"},
-            },
-            "required": ["rel", "content"],
-        },
-    )
-    async def wiki_write(self, event: KiraMessageBatchEvent, rel: str, content: str,
-                         mode: str = "replace", kw_name: str = "") -> str:
-        if self._disabled():
-            return self._disabled_msg()
-        kw = self._get_kw(kw_name, create=True)
+    async def _tool_read(self, ref: str, check: bool, kw_name: str) -> str:
+        """读页 / 列目录 / 体检（wiki_read）。"""
+        kw = self._get_kw(kw_name)
         if kw is None:
-            return ("找不到知识库" if kw_name else "还没有知识库，先 wiki_init（路径可留空）")
-        try:
-            if (mode or "replace").lower() == "append":
-                path, origin = await wc.to_thread(wc.append_page, kw, rel, content)
-            else:
-                path, origin = await wc.to_thread(wc.write_page, kw, rel, content)
-            await wc.to_thread(wc.rebuild_index, kw)
-            await wc.to_thread(wc.append_log, kw, f"{'追加' if mode == 'append' else '写入'} {rel}")
-        except wc.WikiPathError as e:
-            return f"写入失败：{e}"
-        except Exception as e:
-            logger.error(f"[kira-wiki] write failed: {e}")
-            return f"写入失败：{e}"
-        where = "生成区" if origin == wc.ORIGIN_WIKI else "用户笔记区"
-        return (f"已{'追加到' if (mode or '').lower() == 'append' else '写入'} {rel}"
-                f"（{where}，{path.stat().st_size} 字节）\n@ {path}")
+            return "还没有知识库（可用 wiki_write mode=init 建一个，路径可留空）"
+        if ref:
+            hit = await wc.to_thread(self._find_page, kw, ref)
+            if hit is None:
+                return f"找不到页面：{ref}（可先用 wiki_read 不带 ref 看现有页面）"
+            try:
+                pg = await wc.to_thread(wc.read_page, kw, hit["rel"], origin=hit["origin"])
+            except wc.WikiPathError as e:
+                return f"读取失败：{e}"
+            body = pg["content"]
+            if len(body) > 6000:
+                body = body[:6000] + "\n…（截断）"
+            return f"# {pg['rel']}\n\n{body}"
 
-    @register.tool(
-        name="wiki_read",
-        description="读取知识库页面完整正文（按相对路径或标题）。改页面、回答细节问题前先读原文，避免覆盖用户已有内容。",
-        params={
-            "type": "object",
-            "properties": {
-                "rel": {"type": "string", "description": "页面相对路径（如 concepts/xxx.md）或文件名/标题（如 xxx）"},
-                "kw_name": {"type": "string", "description": "知识库名称，留空用默认"},
-            },
-            "required": ["rel"],
-        },
-    )
-    async def wiki_read(self, event: KiraMessageBatchEvent, rel: str, kw_name: str = "") -> str:
-        if self._disabled():
-            return self._disabled_msg()
+        pages = await wc.to_thread(wc.iter_pages, kw)
+        st = await wc.to_thread(wc.stats, kw, pages)
+        by: dict = {}
+        for p in pages:
+            by.setdefault(p.section, []).append(p.name)
+        gen = st["section_pages"] - st["by_section"].get(wc.IMPORTED, 0)
+        lines = [f"知识库 @ {kw}",
+                 f"素材 raw: {st['raw']} | 生成区 {gen} 页 | 外部笔记 "
+                 f"{st['by_section'].get(wc.IMPORTED, 0)} 篇 | 合计 {st['pages']} 页（{st['bytes']} 字节）"]
+        for s in wc.SECTIONS:
+            names = by.get(s, [])
+            lines.append(f"{wc.SECTION_LABEL[s]}（{len(names)}）：{'、'.join(names[:12]) or '空'}")
+        ext = by.get(wc.IMPORTED, [])
+        if ext:
+            lines.append(f"{wc.SECTION_LABEL[wc.IMPORTED]}（{len(ext)}）：{'、'.join(ext[:12])}"
+                         + ("…" if len(ext) > 12 else ""))
+        if not st["root_pages"]:
+            lines.append("提示：该目录还没有 wiki/ 生成区，wiki_write mode=init 即可创建")
+        if not check:
+            lines.append("要完整体检就带 check=true")
+            return "\n".join(lines)
+
+        rep = await wc.to_thread(wc.lint, kw)
+        issues = rep["issues"]
+        if issues:
+            lines.append(f"体检发现 {len(issues)} 个问题：")
+            lines.extend(f"- {i['detail']}（{i['page']}）" for i in issues[:20])
+        else:
+            lines.append("体检：没有发现问题，很健康")
+        return "\n".join(lines)
+
+    async def _tool_delete(self, ref: str, kw_name: str) -> str:
+        """删除页面（wiki_write mode=delete）。"""
         kw = self._get_kw(kw_name)
         if kw is None:
             return "还没有知识库"
-        hit = await wc.to_thread(self._find_page, kw, rel)
+        hit = await wc.to_thread(self._find_page, kw, ref)
         if hit is None:
-            return f"找不到页面：{rel}（可用 wiki_status 看现有页面）"
-        try:
-            pg = await wc.to_thread(wc.read_page, kw, hit["rel"], origin=hit["origin"])
-        except wc.WikiPathError as e:
-            return f"读取失败：{e}"
-        body = pg["content"]
-        if len(body) > 6000:
-            body = body[:6000] + "\n…（截断）"
-        return f"# {pg['rel']}\n\n{body}"
-
-    @register.tool(
-        name="wiki_delete",
-        description="删除知识库页面。用户说'删掉那页/这篇不要了'时调用。核心页（index/overview/log/conventions）不可删。",
-        params={
-            "type": "object",
-            "properties": {
-                "rel": {"type": "string", "description": "页面相对路径（如 entities/xxx.md）或文件名"},
-                "kw_name": {"type": "string", "description": "知识库名称，留空用默认"},
-            },
-            "required": ["rel"],
-        },
-    )
-    async def wiki_delete(self, event: KiraMessageBatchEvent, rel: str, kw_name: str = "") -> str:
-        if self._disabled():
-            return self._disabled_msg()
-        kw = self._get_kw(kw_name)
-        if kw is None:
-            return "还没有知识库"
-        hit = await wc.to_thread(self._find_page, kw, rel)
-        if hit is None:
-            return f"找不到页面：{rel}"
+            return f"找不到页面：{ref}"
         try:
             await wc.to_thread(wc.delete_page, kw, hit["rel"], origin=hit["origin"])
             await wc.to_thread(wc.rebuild_index, kw)
@@ -550,15 +511,86 @@ class KiraWikiPlugin(BasePlugin):
         return f"已删除 {hit['rel']}"
 
     @register.tool(
-        name="wiki_ingest",
-        description="收录素材到知识库：原文写入 raw/，并用生成模型自动编译摘要/实体/概念/分析页。模型不可用时只存 raw 并提示改用 wiki_write。用户说'收录这篇文章/把XX存进知识库'时调用。",
+        name="wiki_write",
+        description="写知识库（内容自己写，不调模型）：写入/追加/删除页面，或初始化、接管知识库目录。",
         params={
             "type": "object",
             "properties": {
-                "content": {"type": "string", "description": "素材内容（文本/文章/笔记正文）"},
+                "mode": {"type": "string", "enum": ["replace", "append", "delete", "init"],
+                         "description": "replace=整页覆盖(默认) | append=追加页尾 | delete=删页 | init=建库/接管目录"},
+                "rel": {"type": "string", "description": "页面相对路径：生成区用 entities|concepts|sources|analyses/名.md；你自己的笔记直接 名.md 或 目录/名.md（同样可写）。delete 可只给标题"},
+                "content": {"type": "string", "description": "markdown 正文（replace/append 必填）；生成区建议带 [[wikilink]]"},
+                "path": {"type": "string", "description": "仅 init：知识库根目录，省略=默认 data/kw（自建；指向已有 vault 会一并载入其笔记）"},
+                "name": {"type": "string", "description": "仅 init：知识库名，省略取目录名"},
+                "kw_name": {"type": "string", "description": "知识库名，留空用默认"},
+            },
+            "required": ["mode"],
+        },
+    )
+    async def wiki_write(self, event: KiraMessageBatchEvent, mode: str = "replace", rel: str = "",
+                         content: str = "", path: str = "", name: str = "",
+                         kw_name: str = "") -> str:
+        if self._disabled():
+            return self._disabled_msg()
+        mode = (mode or "replace").strip().lower()
+        if mode == "init":
+            return await self._tool_init(path, name)
+        if mode == "delete":
+            if not rel:
+                return "删除需要给 rel（页面相对路径或标题）"
+            return await self._tool_delete(rel, kw_name)
+        if mode not in ("replace", "append"):
+            return f"未知 mode：{mode}（可用 replace / append / delete / init）"
+        if not rel or not isinstance(content, str) or not content:
+            return "写入需要同时给 rel 与 content"
+        kw = self._get_kw(kw_name, create=True)
+        if kw is None:
+            return ("找不到知识库" if kw_name else "还没有知识库，先 wiki_write mode=init（路径可留空）")
+        try:
+            if mode == "append":
+                p, origin = await wc.to_thread(wc.append_page, kw, rel, content)
+            else:
+                p, origin = await wc.to_thread(wc.write_page, kw, rel, content)
+            await wc.to_thread(wc.rebuild_index, kw)
+            await wc.to_thread(wc.append_log, kw, f"{'追加' if mode == 'append' else '写入'} {rel}")
+        except wc.WikiPathError as e:
+            return f"写入失败：{e}"
+        except Exception as e:
+            logger.error(f"[kira-wiki] write failed: {e}")
+            return f"写入失败：{e}"
+        where = "生成区" if origin == wc.ORIGIN_WIKI else "用户笔记区"
+        return (f"已{'追加到' if mode == 'append' else '写入'} {rel}"
+                f"（{where}，{p.stat().st_size} 字节）\n@ {p}")
+
+    @register.tool(
+        name="wiki_read",
+        description="读知识库：给 ref 读该页完整正文；不给 ref 列全部页面与统计，check=true 顺带体检。改页前先读原文。",
+        params={
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string", "description": "页面相对路径或标题；留空=列目录+统计"},
+                "check": {"type": "boolean", "description": "列目录时是否做完整体检，默认 false"},
+                "kw_name": {"type": "string", "description": "知识库名，留空用默认"},
+            },
+            "required": [],
+        },
+    )
+    async def wiki_read(self, event: KiraMessageBatchEvent, ref: str = "", check: bool = False,
+                        kw_name: str = "") -> str:
+        if self._disabled():
+            return self._disabled_msg()
+        return await self._tool_read((ref or "").strip(), bool(check), kw_name)
+
+    @register.tool(
+        name="wiki_ingest",
+        description="收录素材：原文写进 raw/，并用生成模型编译摘要/实体/概念/分析页；模型不可用时只存 raw 并提示改用 wiki_write。",
+        params={
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "素材正文"},
                 "title": {"type": "string", "description": "素材标题，用于命名文件"},
-                "kw_name": {"type": "string", "description": "知识库名称，留空用默认知识库"},
-                "source_url": {"type": "string", "description": "素材来源链接（可选）"},
+                "kw_name": {"type": "string", "description": "知识库名，留空用默认"},
+                "source_url": {"type": "string", "description": "来源链接（可选）"},
             },
             "required": ["content", "title"],
         },
@@ -569,7 +601,7 @@ class KiraWikiPlugin(BasePlugin):
             return self._disabled_msg()
         kw = self._get_kw(kw_name, create=True)
         if kw is None:
-            return ("找不到知识库" if kw_name else "还没有知识库，先 wiki_init（路径可留空）")
+            return ("找不到知识库" if kw_name else "还没有知识库，先 wiki_write mode=init（路径可留空）")
         await wc.to_thread(wc.ensure_structure, kw)
 
         slug = wc.slugify(title)
@@ -593,7 +625,7 @@ class KiraWikiPlugin(BasePlugin):
             await wc.to_thread(wc.append_log, kw, f"收录 {title}（生成模型不可用，仅存 raw）")
             return (f"素材已存入 raw/{slug}.md。\n"
                     f"生成模型当前不可用 —— 请用 wiki_write 自己整理页面"
-                    f"（例如 rel=\"sources/{slug}.md\"，或直接写 entities/concepts 页）。")
+                    f"（例如 mode=replace、rel=\"sources/{slug}.md\"，或直接写 entities/concepts 页）。")
 
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", llm_out.strip())
         data = None
@@ -644,12 +676,12 @@ class KiraWikiPlugin(BasePlugin):
 
     @register.tool(
         name="wiki_query",
-        description="查询知识库：按相关度检索 wiki 页面并回答，标注来源。用户问'知识库里XX是什么/查一下wiki'时调用。",
+        description="检索知识库并回答问题，标注来源页面；模型不可用时返回命中的原文片段。",
         params={
             "type": "object",
             "properties": {
-                "question": {"type": "string", "description": "要查询的问题"},
-                "kw_name": {"type": "string", "description": "知识库名称，留空用默认"},
+                "question": {"type": "string", "description": "要问的问题"},
+                "kw_name": {"type": "string", "description": "知识库名，留空用默认"},
             },
             "required": ["question"],
         },
@@ -675,59 +707,6 @@ class KiraWikiPlugin(BasePlugin):
                     f"— 参考页面：{'、'.join(p['rel'] for p in picked[:5])}")
         src = "、".join(p["rel"] for p in picked[:5])
         return f"{answer}\n\n— 参考页面：{src}"
-
-    @register.tool(
-        name="wiki_status",
-        description="知识库状态与体检：列出已有页面、素材数量；check=true 时额外做健康检查（空页/断链/孤立页）。用户问'知识库里有什么/检查知识库/体检'时调用。",
-        params={
-            "type": "object",
-            "properties": {
-                "kw_name": {"type": "string", "description": "知识库名称，留空用默认"},
-                "check": {"type": "boolean", "description": "是否做完整体检（默认 false，只列概览）"},
-            },
-        },
-    )
-    async def wiki_status(self, event: KiraMessageBatchEvent, kw_name: str = "",
-                          check: bool = False) -> str:
-        if self._disabled():
-            return self._disabled_msg()
-        kw = self._get_kw(kw_name)
-        if kw is None:
-            return "还没有知识库（可以用 wiki_init 建一个，路径留空即用默认）"
-        pages = await wc.to_thread(wc.iter_pages, kw)
-        st = await wc.to_thread(wc.stats, kw, pages)
-        if not check:
-            by = {}
-            for p in pages:
-                by.setdefault(p.section, []).append(p.name)
-            lines = [f"知识库 @ {kw}",
-                     f"素材 raw: {st['raw']} | 生成区 {st['section_pages'] - st['by_section'].get(wc.IMPORTED, 0)} 页"
-                     f" | 外部笔记 {st['by_section'].get(wc.IMPORTED, 0)} 篇 | 合计 {st['pages']} 页（{st['bytes']} 字节）"]
-            for s in wc.SECTIONS:
-                names = by.get(s, [])
-                lines.append(f"{wc.SECTION_LABEL[s]}（{len(names)}）：{'、'.join(names[:12]) or '空'}")
-            ext = by.get(wc.IMPORTED, [])
-            if ext:
-                lines.append(f"{wc.SECTION_LABEL[wc.IMPORTED]}（{len(ext)}）：{'、'.join(ext[:12])}"
-                             + ("…" if len(ext) > 12 else ""))
-            if not st["root_pages"]:
-                lines.append("提示：该目录还没有 wiki/ 生成区，执行 wiki_init 即会创建")
-            lines.append("要健康检查就说「体检查一下」，或用面板的体检页")
-            return "\n".join(lines)
-        rep = await wc.to_thread(wc.lint, kw)
-        st = rep["stats"]
-        bs = st["by_section"]
-        lines = [f"知识库体检 @ {kw}",
-                 f"素材 raw: {st['raw']} | 摘要: {bs['sources']} | 实体: {bs['entities']}"
-                 f" | 概念: {bs['concepts']} | 分析: {bs['analyses']}"
-                 f" | 外部笔记: {bs.get(wc.IMPORTED, 0)}"]
-        issues = rep["issues"]
-        if issues:
-            lines.append(f"发现 {len(issues)} 个问题：")
-            lines.extend(f"- {i['detail']}（{i['page']}）" for i in issues[:20])
-        else:
-            lines.append("没有发现问题，很健康")
-        return "\n".join(lines)
 
     # ==================================================================
     # 面板 API（供侧边栏页面使用；全部 async + auth）
@@ -763,7 +742,7 @@ class KiraWikiPlugin(BasePlugin):
         return ""
 
     def _find_page(self, kw: Path, ref: str) -> Optional[dict]:
-        """按相对路径或标题/文件名定位页面（供 wiki_read / wiki_delete 用）。"""
+        """按相对路径或标题/文件名定位页面（供 wiki_read / wiki_write mode=delete 用）。"""
         ref = (ref or "").strip().replace("\\", "/")
         if not ref:
             return None

@@ -131,9 +131,10 @@ def main() -> int:
 
     from core.plugin.plugin_context import PluginContext    # noqa: E402
     try:
-        from core.plugin.plugin_registry import PluginManager, PLUGINS_DIR
+        from core.plugin.plugin_registry import PluginManager, PLUGINS_DIR, _plugin_components
     except ModuleNotFoundError:                             # 3.0：模块被拆成 manager/registry
         from core.plugin.manager import PluginManager, PLUGINS_DIR
+        from core.plugin.registry import _plugin_components
     from webui.routes.auth import require_auth              # noqa: E402
 
     from core.config.default import VERSION                 # noqa: E402
@@ -174,9 +175,17 @@ def main() -> int:
     print("\n[1] 加载与注册")
     check("插件加载成功", pid == PLUGIN_NAME, str(pid))
     tools = ctx.tool_mgr.tools
-    for t in ("wiki_init", "wiki_write", "wiki_read", "wiki_delete",
-              "wiki_ingest", "wiki_query", "wiki_status"):
+    for t in ("wiki_write", "wiki_read", "wiki_ingest", "wiki_query"):
         check(f"工具 {t}", t in tools)
+    # 每轮请求都会注入工具 schema ⇒ 数量与体量都要守住，防止悄悄反弹
+    check("工具数恰好为 4（合并后不许反弹）", len(tools) == 4, f"实际 {len(tools)}: {sorted(tools)}")
+    import json as _json
+    comp = _plugin_components[PLUGIN_NAME]
+    budget = 0
+    for name, meta in comp.tools.items():
+        budget += len(name) + len(meta.get("description", "")) + len(
+            _json.dumps(meta.get("parameters") or {}, ensure_ascii=False, separators=(",", ":"))) + 12
+    check("工具 schema 总量 <= 1700 字符（v1.3.0 实测 1585）", budget <= 1700, f"实际 {budget}")
     page = f"/page/plugin/{PLUGIN_NAME}/index/"
     check("页面路由已挂载", client.get(page).status_code in (200, 307, 401))
     r = client.get(f"{base}/library")
@@ -205,13 +214,18 @@ def main() -> int:
     print("\n[4] bot 自己写 / 读 / 删（完全不调用生成模型）")
     r = client.post(f"{base}/page", json={"rel": "entities/自己写.md", "content": "# 自己写\n\n" + "字" * 60})
     check("面板写页 200", r.status_code == 200, r.text[:150])
-    out = loop.run_until_complete(tools["wiki_write"](event=None, rel="concepts/工具写.md",
-                                                      content="# 工具写\n\n[[自己写]] " + "字" * 60))
-    check("wiki_write 成功", "已写入" in out, out[:120])
-    out = loop.run_until_complete(tools["wiki_read"](event=None, rel="工具写"))
-    check("wiki_read 命中", "工具写" in out, out[:120])
-    out = loop.run_until_complete(tools["wiki_delete"](event=None, rel="concepts/工具写.md"))
-    check("wiki_delete 成功", "已删除" in out, out[:120])
+    out = loop.run_until_complete(tools["wiki_write"](
+        event=None, mode="replace", rel="concepts/工具写.md",
+        content="# 工具写\n\n[[自己写]] " + "字" * 60))
+    check("wiki_write(默认 replace) 成功", "已写入" in out, out[:120])
+    out = loop.run_until_complete(tools["wiki_write"](
+        event=None, mode="append", rel="concepts/工具写.md", content="追加一段"))
+    check("wiki_write(mode=append) 成功", "已追加到" in out, out[:120])
+    out = loop.run_until_complete(tools["wiki_read"](event=None, ref="工具写"))
+    check("wiki_read(ref) 命中", "工具写" in out and "追加一段" in out, out[:120])
+    out = loop.run_until_complete(tools["wiki_write"](
+        event=None, mode="delete", rel="concepts/工具写.md"))
+    check("wiki_write(mode=delete) 成功", "已删除" in out, out[:120])
     check("文件真的没了", not (kb / "wiki" / "concepts" / "工具写.md").exists())
     check("整个写/读/删过程一次都没碰生成模型", _FakeLLM.calls == 0, f"实际调用 {_FakeLLM.calls} 次")
 
@@ -242,9 +256,26 @@ def main() -> int:
     delta = section_pages() - before
     check("max_pages=15 ⇒ 12 页全写入", delta == 12, f"实际新增 {delta}")
 
+    print("\n[6.5] 工具合并后的等价性：init / 列目录 / 体检 / 参数校验")
+    kb3 = work / "kb3"
+    out = loop.run_until_complete(tools["wiki_write"](
+        event=None, mode="init", path=str(kb3), name="kb3"))
+    check("wiki_write(mode=init) 建库成功", "已就绪" in out and kb3.is_dir(), out[:120])
+    check("建库后 registry 有 kb3", "kb3" in client.get(f"{base}/library").json()["registry"])
+    out = loop.run_until_complete(tools["wiki_read"](event=None, kw_name="kb3"))
+    check("wiki_read 无 ref ⇒ 列目录+统计", "知识库 @" in out and "素材 raw" in out, out[:120])
+    out = loop.run_until_complete(tools["wiki_read"](event=None, kw_name="kb3", check=True))
+    check("wiki_read(check=true) ⇒ 带体检结论", "体检" in out, out[:120])
+    out = loop.run_until_complete(tools["wiki_write"](event=None, mode="bogus", rel="a.md", content="x"))
+    check("未知 mode 被拒", "未知 mode" in out, out[:120])
+    out = loop.run_until_complete(tools["wiki_write"](event=None, mode="replace", rel="concepts/x.md"))
+    check("缺 content 被拒", "需要同时给" in out, out[:120])
+    out = loop.run_until_complete(tools["wiki_write"](event=None, mode="delete", rel=""))
+    check("缺 rel 被拒", "需要给 rel" in out, out[:120])
+
     print("\n[7] enabled=false 真的停用")
     inst.enabled = False
-    out = loop.run_until_complete(tools["wiki_status"](event=None))
+    out = loop.run_until_complete(tools["wiki_read"](event=None))
     check("工具返回已停用", "已停用" in out, out[:120])
     check("API 返回 409", client.get(f"{base}/tree").status_code == 409)
     check("/library 仍 200（面板要能解释为什么）",
