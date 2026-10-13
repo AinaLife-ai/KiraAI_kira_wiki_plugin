@@ -444,3 +444,66 @@ html[data-theme="light"] .modal-box{background:var(--paper)}
 .modal-text{margin:0;font-size:13px;line-height:1.75;color:var(--fg-dim);white-space:pre-wrap}
 .modal-fields{display:grid;gap:10px}
 .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:2px}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   模型下拉 / LLM 勾选 / 设置表单（v1.5.0）
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* —— 模型下拉 —— */
+.modelpick{position:relative}
+.mc-caret{width:12px;height:12px;opacity:.6;margin-left:2px}
+.menu{
+  position:absolute;left:0;top:calc(100% + 6px);z-index:60;width:min(340px,74vw);max-height:54vh;
+  overflow:auto;border:1px solid var(--hair-hi);border-radius:var(--r);
+  background:color-mix(in oklab,var(--ink-2) 97%,transparent);backdrop-filter:blur(18px);
+  box-shadow:0 18px 44px rgba(0,0,0,.42);text-align:left;
+}
+html[data-theme="light"] .menu{background:color-mix(in oklab,var(--paper) 97%,transparent)}
+.menu-head{
+  position:sticky;top:0;display:flex;justify-content:space-between;gap:8px;padding:10px 12px;
+  border-bottom:1px solid var(--hair);background:inherit;
+  font-family:var(--f-mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-faint);
+}
+.menuitem{display:block;width:100%;text-align:left;padding:9px 12px;border-bottom:1px dashed var(--hair)}
+.menuitem:last-child{border-bottom:0}
+.menuitem b{display:block;font-weight:500;font-size:13px;color:var(--fg)}
+.menuitem span{font-family:var(--f-mono);font-size:10px;color:var(--fg-faint)}
+.menuitem:hover{background:var(--glass)}
+.menuitem.on b{color:var(--acid)}
+.menu-empty{padding:12px;font-size:12px;color:var(--fg-dim)}
+
+/* —— LLM 勾选 —— */
+.llmtoggle{
+  height:38px;flex:none;padding:0 11px;border:1px solid var(--hair);border-radius:var(--r-sm);
+  background:var(--glass);color:var(--fg-faint);cursor:pointer;
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.16em;
+  transition:color .2s var(--ease),border-color .2s var(--ease);
+}
+.llmtoggle:hover{color:var(--fg);border-color:var(--hair-hi)}
+.llmtoggle.on{color:var(--acid);border-color:color-mix(in oklab,var(--acid) 60%,transparent)}
+
+/* —— 设置表单 —— */
+.setform{display:grid;gap:13px}
+.setrow{display:grid;grid-template-columns:148px 1fr;align-items:center;gap:12px}
+.setrow > span{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-faint)}
+.setrow input[type=text],.setrow input[type=number],.setrow select{
+  width:100%;padding:8px 10px;border:1px solid var(--hair);border-radius:var(--r-sm);
+  background:transparent;color:var(--fg);font-family:var(--f-sans);font-size:13px;outline:none;
+}
+.setrow input.mono{font-family:var(--f-mono);font-size:11.5px}
+.setrow select option{background:var(--ink-2);color:var(--fg)}
+html[data-theme="light"] .setrow select option{background:var(--paper)}
+.setrow input:focus,.setrow select:focus{border-color:var(--hair-hi);background:var(--glass-2)}
+.setrow input[type=checkbox]{width:16px;height:16px;accent-color:var(--acid);justify-self:start}
+.setfoot{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:2px}
+.set-hint{font-size:11px;line-height:1.7;color:var(--fg-faint)}
+
+/* —— 检索命中列表 / 问答里的 LLM 勾选 —— */
+.askllm{display:flex;align-items:center;gap:8px;margin:0 0 13px;font-size:12px;color:var(--fg-dim)}
+.askllm input{width:15px;height:15px;accent-color:var(--acid)}
+.hit{padding:10px 12px;border:1px solid var(--hair);border-radius:var(--r-sm);margin-bottom:8px;cursor:pointer;transition:border-color .2s var(--ease)}
+.hit:hover{border-color:var(--hair-hi)}
+.hit b{font-weight:500;font-size:13px}
+.hit .meta{display:block;margin:2px 0 5px}
+.hit p{margin:0;font-size:12.5px;line-height:1.7;color:var(--fg-dim)}

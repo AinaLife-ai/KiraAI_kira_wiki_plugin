@@ -22,6 +22,7 @@ v1.3.0
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime
@@ -194,11 +195,24 @@ class KiraWikiPlugin(BasePlugin):
                 logger.info("[kira-wiki] 插件配置已整理并回写")
 
     def _persist_config(self) -> bool:
-        """把内存里的插件配置写回 data/config/plugins/<id>.json（与内置 agent 插件同款做法）。"""
+        """把内存里的插件配置写回 data/config/plugins/<id>.json。
+
+        · **原子写**：先写临时文件再 replace，避免半截文件；
+        · 只此一份配置 ⇒ 框架「插件设置页」天然是同步镜像（两边改的都是它）；
+        · 写完把 plugin_cfg 同步进宿主内存（通常本就是同一个 dict 对象，这里兜底）。
+        """
         try:
             path = get_config_path() / "plugins" / f"{PLUGIN_ID}.json"
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self.plugin_cfg, ensure_ascii=False, indent=4), "utf-8")
+            tmp = path.with_suffix(".kw.tmp")
+            tmp.write_text(json.dumps(self.plugin_cfg, ensure_ascii=False, indent=4), "utf-8")
+            tmp.replace(path)
+            try:
+                mgr = getattr(self.ctx, "plugin_mgr", None)
+                if mgr is not None and hasattr(mgr, "plugin_configs"):
+                    mgr.plugin_configs[PLUGIN_ID] = self.plugin_cfg
+            except Exception:
+                pass
             return True
         except Exception as e:
             logger.error(f"[kira-wiki] 配置回写失败: {e}")
@@ -295,11 +309,23 @@ class KiraWikiPlugin(BasePlugin):
         return Path(_abspath(path) or self.default_kw_path or _default_kw_path())
 
     def _model_label(self, ref: str) -> str:
-        """把模型引用变成给人看的标签：`服务商显示名 · 可读模型名`（解析不出就退回引用本身）。"""
+        """把模型引用变成给人看的标签：`服务商显示名 · 可读模型名`（解析不出就退回引用本身）。
+
+        优先读**原始 provider 配置**：3.0 的模型 key 可能是 uuid，可读名在 `model_name`，
+        只有从这里才能拿到人看得懂的名字（框架 API 在旧版没有 model_name 字段）。
+        """
         try:
             if not ref or ":" not in ref:
                 return ref or ""
             pid, mid = ref.split(":", 1)
+            provs = self._providers_raw() or {}
+            prov = provs.get(pid) if isinstance(provs, dict) else None
+            if isinstance(prov, dict):
+                pname = prov.get("name") or pid
+                entry = ((prov.get("model_config") or {}).get("llm") or {}).get(mid)
+                display, _legacy = self._model_entry_name(mid, entry)
+                if display:
+                    return f"{pname} · {display}"
             pm = getattr(self.ctx, "provider_mgr", None)
             name = pid
             if pm is not None:
@@ -737,6 +763,170 @@ class KiraWikiPlugin(BasePlugin):
         return f"{answer}\n\n— 参考页面：{src}"
 
     # ==================================================================
+    # 设置：面板内改 + 热生效（框架插件设置页作为同步镜像）
+    # ==================================================================
+
+    @staticmethod
+    def _model_entry_name(mid, entry):
+        """模型显示名。3.0 的 key 可能是 uuid（可读名在 model_name）；2.x 的 key 本身就是可读名。"""
+        if isinstance(entry, dict):
+            name = str(entry.get("model_name") or "").strip()
+            if name:
+                legacy = [str(x) for x in (entry.get("legacy_ids") or []) if x]
+                return name, legacy
+        return str(mid), []
+
+    def _providers_raw(self) -> dict:
+        """原始 provider 配置（能读到 model_name / legacy_ids）。多代兜底，拿不到就返回 {}。"""
+        holders = (getattr(self.ctx, "provider_mgr", None), getattr(self.ctx, "config", None))
+        for holder in holders:
+            if holder is None:
+                continue
+            for attr in ("kira_config", "_config", "config"):
+                cfg = getattr(holder, attr, None)
+                if cfg is None:
+                    continue
+                try:
+                    if isinstance(cfg, dict):
+                        provs = cfg.get("providers") or {}
+                    elif hasattr(cfg, "get_config"):
+                        provs = cfg.get_config("providers", {}) or {}
+                    else:
+                        continue
+                except Exception:
+                    continue
+                if provs:
+                    return provs
+        return {}
+
+    def _list_llm_models(self) -> list:
+        """列出所有可用的 LLM（id 是 `实例ID:模型ID`，可直接喂给 ctx.get_llm_client）。"""
+        out: list = []
+        seen: set = set()
+
+        def _push(pid, mid, display, pname):
+            key = f"{pid}:{mid}"
+            if not mid or key in seen:
+                return
+            seen.add(key)
+            name = display or mid
+            out.append({"id": key, "name": name, "provider": pname or pid,
+                        "label": f"{pname or pid} · {name}"})
+
+        for pid, prov in (self._providers_raw() or {}).items():
+            if not isinstance(prov, dict):
+                continue
+            pname = prov.get("name") or pid
+            for mid, entry in ((prov.get("model_config") or {}).get("llm") or {}).items():
+                display, _legacy = self._model_entry_name(mid, entry)
+                _push(pid, mid, display, pname)
+        if not out:                       # 兜底：官方 API（可读名可能拿不到，但至少能用）
+            try:
+                pm = getattr(self.ctx, "provider_mgr", None)
+                for pid, prov in (pm.get_all_providers() or {}).items():
+                    pname = getattr(prov, "provider_name", "") or pid
+                    for mi in (pm.get_model_infos(pid) or []):
+                        mt = getattr(mi, "model_type", "")
+                        mt = getattr(mt, "value", mt)
+                        if mt and mt != "llm":
+                            continue
+                        mid = getattr(mi, "model_id", "")
+                        _push(pid, mid, getattr(mi, "model_name", "") or mid, pname)
+            except Exception as e:
+                logger.warning(f"[kira-wiki] 枚举模型失败：{e}")
+        return out
+
+    def _model_short(self, ref: str) -> str:
+        """芯片用的短标签：只取模型名（顶栏窄，provider 放 tooltip）。"""
+        if not ref:
+            return ""
+        for m in self._list_llm_models():
+            if m["id"] == ref:
+                return m["name"]
+        return ref.split(":", 1)[-1]
+
+    def _config_revision(self) -> str:
+        """配置指纹（前端拿着它做乐观并发：别人改过就让前端刷新，避免互相覆盖）。"""
+        raw = json.dumps(self.plugin_cfg or {}, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    def _settings_payload(self) -> dict:
+        canonical, label, err = self._canonical_model_ref(self.llm_model)
+        return {
+            "revision": self._config_revision(),
+            "enabled": self.enabled,
+            "default_kw_path": self.default_kw_path,
+            "default_path_hint": _default_kw_path(),
+            "max_pages_per_ingest": self.max_pages,
+            "model": self.llm_model,
+            "model_label": label or ("KiraAI 默认 LLM" if not self.llm_model else self.llm_model),
+            "model_short": self._model_short(self.llm_model) or "KiraAI 默认 LLM",
+            "model_ok": bool(canonical) or not self.llm_model,
+            "model_error": err,
+            "models": self._list_llm_models(),
+        }
+
+    def _apply_settings(self, body: dict) -> dict:
+        """校验 → 改内存字段（**热生效**）→ 改 plugin_cfg → 原子落盘 + 同步宿主。
+
+        在 wc.to_thread 里跑：文件 IO 绝不落在事件循环上。
+        """
+        basic = self.plugin_cfg.setdefault("section_basic", {})
+        llm = self.plugin_cfg.setdefault("section_llm", {})
+        if body.get("enabled") is not None:
+            self.enabled = bool(body["enabled"])
+            basic["enabled"] = self.enabled
+        if body.get("default_kw_path") is not None:
+            path = _abspath(str(body["default_kw_path"])) or _default_kw_path()
+            self.default_kw_path = path
+            basic["default_kw_path"] = path
+        if body.get("model") is not None:
+            ref = str(body["model"]).strip()
+            if ref:
+                canonical, _label, err = self._canonical_model_ref(ref)
+                if err:
+                    raise ValueError(f"模型不可用：{err}")
+                ref = canonical or ref
+            self.llm_model = ref
+            llm["model"] = ref
+        if body.get("max_pages_per_ingest") is not None:
+            try:
+                n = int(body["max_pages_per_ingest"])
+            except (TypeError, ValueError):
+                raise ValueError("单次收录页数必须是整数")
+            if n < 1 or n > 200:
+                raise ValueError("单次收录页数需在 1–200 之间")
+            self.max_pages = n
+            llm["max_pages_per_ingest"] = n
+        if not self._persist_config():
+            raise ValueError("配置写入失败（请检查 data/config 目录权限）")
+        return self._settings_payload()
+
+    @register.api(method="GET", path="/settings", auth=True)
+    async def api_settings(self):
+        """面板设置：当前值 + 可选模型列表 + 配置指纹。
+
+        刻意**不检查 `enabled`** —— 否则关掉插件后就再也打不开设置了。
+        """
+        return await wc.to_thread(self._settings_payload)
+
+    @register.api(method="POST", path="/settings", auth=True)
+    async def api_settings_save(self, body: dict = None):
+        """保存设置（部分字段亦可）：{revision?, enabled?, default_kw_path?, model?, max_pages_per_ingest?}"""
+        from fastapi import HTTPException
+        body = dict(body or {})
+        rev = body.pop("revision", None)
+        if rev is not None and rev != self._config_revision():
+            raise HTTPException(status_code=409, detail="配置已被别处改动，请刷新后重试")
+        try:
+            return await wc.to_thread(self._apply_settings, body)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            logger.error(f"[kira-wiki] 保存设置失败: {e}")
+            raise HTTPException(status_code=500, detail=f"保存失败：{e}")
+
+    # ==================================================================
     # 面板 API（供侧边栏页面使用；全部 async + auth）
     # ==================================================================
 
@@ -820,6 +1010,7 @@ class KiraWikiPlugin(BasePlugin):
                 "value": self.llm_model or "",
                 "canonical": canonical,
                 "label": label or ("KiraAI 默认 LLM" if not self.llm_model else (self.llm_model or "")),
+                "short": self._model_short(self.llm_model) or "KiraAI 默认 LLM",
                 "ok": bool(canonical) or not self.llm_model,
                 "error": err,
             }
