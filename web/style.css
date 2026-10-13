@@ -282,12 +282,18 @@ body.drawer-open .stage{opacity:.72;transition:opacity .5s var(--ease)}
 /* ══════════ 浮层（体检 / 问答） ══════════ */
 .sheet{
   position:fixed;left:50%;bottom:40px;width:min(760px,92vw);max-height:70vh;z-index:40;
-  transform:translate(-50%,104%);transition:transform .6s var(--ease);
+  /* 闭合态必须「完全」移出视口：只写 104% 时，bottom:40px 会让头部约 27px 残留在屏幕底边
+     —— 那一截正好是带头部 × 的，用户以为面板没关掉、点它又没反应。
+     所以位移改成 calc(100% + 48px)（自身高度 + 40px 底部偏移 + 8px 余量），
+     并且闭合时同时不可见、不可点。 */
+  transform:translate(-50%,calc(100% + 48px));
+  opacity:0;visibility:hidden;pointer-events:none;
+  transition:transform .6s var(--ease),opacity .3s var(--ease),visibility .6s;
   background:color-mix(in oklab,var(--ink-2) 96%,transparent);backdrop-filter:blur(20px);
   border:1px solid var(--hair-hi);border-radius:var(--r-lg);
   display:flex;flex-direction:column;
 }
-.sheet.open{transform:translate(-50%,0)}
+.sheet.open{transform:translate(-50%,0);opacity:1;visibility:visible;pointer-events:auto}
 .sheet-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--hair)}
 .sheet-body{padding:18px;overflow:auto;font-size:13.5px}
 .sheet-body .row{display:grid;grid-template-columns:26px 1fr;gap:10px;padding:9px 0;border-bottom:1px dashed var(--hair)}
