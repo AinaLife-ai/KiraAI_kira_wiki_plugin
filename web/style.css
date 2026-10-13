@@ -25,6 +25,7 @@
   --ent:#66e2ff;   /* 实体 */
   --con:#ff9d5c;   /* 概念 */
   --ana:#c9a6ff;   /* 分析 */
+  --ext:#8d99a6;   /* 外部笔记（用户自己的 .md） */
   --ok:#7ef0a8;
   --warn:#ffcc55;
   /* —— 排版 —— */
@@ -42,8 +43,11 @@ html[data-theme="light"]{
   --hair:rgba(20,22,28,.12); --hair-hi:rgba(20,22,28,.30);
   --glass:rgba(255,255,255,.52); --glass-2:rgba(255,255,255,.72);
   --acid:#4f7a00; --flame:#c73d13; --ice:#00758f;
-  --src:#4f7a00; --ent:#00758f; --con:#b3521b; --ana:#6f45b8;
+  --src:#4f7a00; --ent:#00758f; --con:#b3521b; --ana:#6f45b8; --ext:#5d6b78;
 }
+
+/* display:flex/grid 会覆盖 UA 的 [hidden]{display:none} —— 显式兜底，避免隐藏元素漏出 */
+[hidden]{display:none!important}
 
 *,*::before,*::after{box-sizing:border-box}
 html,body{height:100%}
@@ -350,3 +354,87 @@ body.drawer-open .stage{opacity:.72;transition:opacity .5s var(--ease)}
   *{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important}
   [data-reveal]{opacity:1;transform:none}
 }
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   面板自举 / 库切换 / 页内 modal（v1.2.0 新增）
+   原生 prompt/confirm 在插件 iframe（sandbox 无 allow-modals）里会被浏览器
+   静默吞掉 —— 所以一切输入与确认都在页面内自绘。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* —— 库切换器 —— */
+.kbpick{
+  display:flex;align-items:center;gap:8px;padding:0 10px;height:38px;
+  border:1px solid var(--hair);background:var(--glass);border-radius:var(--r-sm);
+  max-width:220px;
+}
+.kbpick svg{width:15px;height:15px;color:var(--fg-faint);flex:none}
+.kbpick select{
+  appearance:none;-webkit-appearance:none;background:none;border:0;color:var(--fg);
+  font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;
+  text-transform:uppercase;max-width:170px;cursor:pointer;outline:none;
+}
+.kbpick select option{background:var(--ink-2);color:var(--fg);text-transform:none}
+html[data-theme="light"] .kbpick select option{background:var(--paper)}
+
+/* —— 顶部提示条 —— */
+.tip{
+  position:absolute;left:16px;right:16px;top:64px;display:flex;align-items:center;gap:10px;
+  padding:9px 12px;border:1px solid var(--hair);border-left:2px solid var(--warn);
+  background:var(--glass);border-radius:var(--r-sm);
+  font-family:var(--f-mono);font-size:11px;color:var(--fg-dim);z-index:3;
+}
+.tip svg{width:15px;height:15px;color:var(--warn);flex:none}
+.tip span{flex:1;min-width:0}
+
+/* —— 自举引导卡（在 .empty 里，需要单独打开指针事件） —— */
+.empty.show .kb-setup{pointer-events:auto}
+.kb-setup{
+  margin-top:18px;width:min(520px,86vw);padding:16px 18px;
+  border:1px solid var(--hair);border-radius:var(--r);background:var(--glass);
+  display:grid;gap:10px;text-align:left;
+}
+.kbs-row{display:grid;grid-template-columns:56px 1fr;align-items:center;gap:10px}
+.kbs-lab{font-family:var(--f-mono);font-size:10px;letter-spacing:.16em;color:var(--fg-faint);text-transform:uppercase}
+.kbs-input{
+  width:100%;padding:8px 10px;border:1px solid var(--hair);border-radius:var(--r-sm);
+  background:transparent;color:var(--fg);font-family:var(--f-sans);font-size:13px;outline:none;
+}
+.kbs-input.mono{font-family:var(--f-mono);font-size:11.5px}
+.kbs-input:focus{border-color:var(--hair-hi);background:var(--glass-2)}
+.kbs-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
+.kbs-btn{
+  padding:7px 14px;border:1px solid var(--hair);border-radius:var(--r-sm);
+  background:transparent;color:var(--fg-dim);
+  font-family:var(--f-mono);font-size:11px;letter-spacing:.1em;cursor:pointer;
+  transition:border-color .2s var(--ease),color .2s var(--ease);
+}
+.kbs-btn:hover{border-color:var(--hair-hi);color:var(--fg)}
+.kbs-btn.primary{border-color:var(--acid);color:var(--acid)}
+.kbs-btn.primary:hover{background:var(--acid);color:#0a0c10}
+.kbs-btn[disabled]{opacity:.5;cursor:default}
+.kbs-hint{margin:2px 0 0;font-size:11px;line-height:1.7;color:var(--fg-faint)}
+
+/* —— 外部笔记标记 —— */
+.chip.ext{border-color:var(--ext);color:var(--ext)}
+.ext-note{
+  margin:0 0 14px;padding:8px 10px;border-left:2px solid var(--ext);
+  background:var(--glass);font-family:var(--f-mono);font-size:11px;color:var(--fg-dim);
+}
+
+/* —— 页内模态框 —— */
+.modal{position:fixed;inset:0;z-index:80;display:grid;place-items:center}
+.modal[hidden]{display:none}
+.modal-mask{position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(3px)}
+html[data-theme="light"] .modal-mask{background:rgba(20,22,28,.34)}
+.modal-box{
+  position:relative;width:min(480px,88vw);padding:20px 22px;
+  border:1px solid var(--hair-hi);border-radius:var(--r-lg);
+  background:var(--ink-2);box-shadow:0 24px 60px rgba(0,0,0,.45);
+  display:grid;gap:14px;
+}
+html[data-theme="light"] .modal-box{background:var(--paper)}
+.modal-title{margin:0;font-family:var(--f-display);font-size:22px;font-weight:400}
+.modal-text{margin:0;font-size:13px;line-height:1.75;color:var(--fg-dim);white-space:pre-wrap}
+.modal-fields{display:grid;gap:10px}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:2px}

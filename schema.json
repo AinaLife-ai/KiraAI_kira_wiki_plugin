@@ -12,17 +12,17 @@
         "name": "Enabled",
         "default": true,
         "locales": {
-          "zh": { "name": "启用插件", "hint": "关闭后工具与侧边栏面板都不再工作" }
+          "zh": { "name": "启用插件", "hint": "关闭后 7 个知识库工具与整个侧边栏面板都不再工作（面板会提示已停用）" }
         }
       },
       "default_kw_path": {
         "type": "string",
         "name": "Default knowledge base path",
-        "default": "data/kw",
+        "default": "",
         "locales": {
           "zh": {
             "name": "默认知识库目录",
-            "hint": "Obsidian vault 根目录；支持相对 KiraAI 根目录的相对路径（如 data/kw）或绝对路径。留空则每次都要指定知识库名"
+            "hint": "留空 = <KiraAI 根目录>/data/kw（不存在时会在你点「创建」或首次写入时自动建立）。也可以直接指向已有的 Obsidian 库：里面的笔记会被一并载入图谱与检索，可读可写；插件不会擅自改动它们。支持绝对路径或相对 KiraAI 根目录的相对路径。"
           }
         }
       }
@@ -44,7 +44,7 @@
         "locales": {
           "zh": {
             "name": "生成模型",
-            "hint": "下拉选择用于生成 wiki 页面的模型；留空使用 KiraAI 默认 LLM。旧配置里手填的「服务商:模型名」仍可用，插件会自动解析并迁移成下拉值"
+            "hint": "下拉选择用于「收录素材自动编译」与「面板问答」的模型；留空使用 KiraAI 默认 LLM。注意：这不影响你（bot）直接用 wiki_write 自己写页面——那条路径完全不调用模型。旧配置里手填的「服务商:模型名」仍可用，插件会自动解析并迁移成下拉值"
           }
         }
       },
@@ -55,7 +55,7 @@
         "locales": {
           "zh": {
             "name": "单次收录最多生成页数",
-            "hint": "一次 wiki_ingest 最多生成多少页面（含摘要/实体/概念/分析）"
+            "hint": "一次 wiki_ingest 最多写入多少页面（含摘要/实体/概念/分析，优先保摘要与分析）。生成模型不可用时该上限不生效，素材只进 raw/"
           }
         }
       }

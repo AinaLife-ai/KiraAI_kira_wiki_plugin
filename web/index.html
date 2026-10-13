@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-store">
 <title>Kira Wiki · 知识晶格</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=1.2.0">
 <script>
   /* 主题在首帧之前定下来，避免闪白；尊重系统偏好 */
   (function () {
@@ -108,6 +108,10 @@
         <svg viewBox="0 0 24 24"><use href="#i-sparkle"/></svg>
         <span class="mc-label" id="modelLabel">默认 LLM</span>
       </button>
+      <div class="kbpick" id="kbPickWrap" hidden>
+        <svg viewBox="0 0 24 24"><use href="#i-library"/></svg>
+        <select id="kbPicker" title="切换知识库"></select>
+      </div>
       <input id="searchInput" class="search" type="search" placeholder="搜索页面 / 实体 / 概念…" spellcheck="false" autocomplete="off">
       <div class="hud-spacer"></div>
       <button class="icobtn" id="btnAsk" title="问知识库 (A)"><svg viewBox="0 0 24 24"><use href="#i-sparkle"/></svg></button>
@@ -117,10 +121,33 @@
       <button class="icobtn" id="btnTheme" title="切换主题"><svg viewBox="0 0 24 24"><use href="#i-moon"/></svg></button>
     </div>
 
+    <div class="tip" id="tip" hidden>
+      <svg viewBox="0 0 24 24"><use href="#i-info"/></svg>
+      <span id="tipText"></span>
+      <button class="kbs-btn" id="tipAction" hidden>初始化知识库</button>
+    </div>
+
     <div class="empty" id="empty">
       <svg class="empty-icon" viewBox="0 0 24 24"><use href="#i-grid"/></svg>
       <p class="empty-lead" id="emptyLead">正在读取知识库…</p>
       <p class="empty-sub" id="emptySub"></p>
+
+      <!-- 自举：无库/未初始化时的引导卡（纯页内表单，不用原生 prompt） -->
+      <div class="kb-setup" id="kbSetup" hidden>
+        <div class="kbs-row">
+          <label class="kbs-lab" for="kbsName">名称</label>
+          <input id="kbsName" class="kbs-input" type="text" placeholder="默认知识库" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="kbs-row">
+          <label class="kbs-lab" for="kbsPath">目录</label>
+          <input id="kbsPath" class="kbs-input mono" type="text" placeholder="data/kw" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="kbs-actions">
+          <button class="kbs-btn primary" id="kbsCreate">创建 / 接管这个目录</button>
+          <button class="kbs-btn" id="kbsRetry">重新检测</button>
+        </div>
+        <p class="kbs-hint">目录不存在会自动创建；指向已有的 Obsidian 库时，里面的笔记会一并载入（可读可写），插件不会擅自改动它们。</p>
+      </div>
     </div>
 
     <div class="legend" id="legend">
@@ -128,6 +155,7 @@
       <span class="lg"><i class="sw sw-e"></i>实体</span>
       <span class="lg"><i class="sw sw-c"></i>概念</span>
       <span class="lg"><i class="sw sw-a"></i>分析</span>
+      <span class="lg" id="lgExt" hidden><i class="sw" style="background:var(--ext)"></i>外部笔记</span>
       <span class="lg hint">滚轮缩放 · 拖拽节点 · 双击聚焦</span>
     </div>
   </section>
@@ -178,9 +206,23 @@
   <div class="ticker-track"><div class="ticker-run" id="tickerRun"></div></div>
 </footer>
 
+<!-- ═══════════ 页内模态框（原生 prompt/confirm 在插件 iframe 里会被沙箱吞掉） ═══════════ -->
+<div class="modal" id="modal" hidden aria-hidden="true">
+  <div class="modal-mask" id="modalMask"></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <h3 class="modal-title" id="modalTitle">—</h3>
+    <p class="modal-text" id="modalText" hidden></p>
+    <div class="modal-fields" id="modalFields"></div>
+    <div class="modal-actions">
+      <button class="kbs-btn" id="modalCancel">取消</button>
+      <button class="kbs-btn primary" id="modalOk">确定</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="graph.js"></script>
-<script src="app.js"></script>
+<script src="graph.js?v=1.2.0"></script>
+<script src="app.js?v=1.2.0"></script>
 </body>
 </html>

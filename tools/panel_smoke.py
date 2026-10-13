@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""Kira Wiki · 真框架冒烟测试（起真 FastAPI 路由 + 真插件管理器，不占端口）。
+
+用途：把插件装进**你本地的 KiraAI 源码**跑一遍端到端断言，确认与框架的世代兼容
+（2.34.x / 3.0 rc.x 都行——脚本按世代自适应模块名与 PluginContext 字段）。
+
+    python tools/panel_smoke.py --framework /path/to/KiraAI
+    python tools/panel_smoke.py --framework /path/to/KiraAI-3.0 --keep
+
+退出码 0 = 全部通过；非 0 = 有断言失败（会打印失败项）。
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import dataclasses
+import json
+import os
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PLUGIN_ROOT))
+
+import wiki_core as wc  # noqa: E402  （插件根目录下的纯标准库服务层）
+PLUGIN_DIR_NAME = PLUGIN_ROOT.name
+_MANIFEST = json.loads((PLUGIN_ROOT / "manifest.json").read_text("utf-8"))
+PLUGIN_NAME = _MANIFEST.get("plugin_id") or PLUGIN_DIR_NAME
+
+PASS, FAIL = [], []
+
+
+def check(name: str, cond: bool, extra: str = "") -> None:
+    (PASS if cond else FAIL).append(name)
+    print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f" — {extra}" if extra and not cond else ""))
+
+
+class _ToolMgr:
+    def __init__(self):
+        self.tools = {}
+
+    def register_tool(self, name, description, parameters, func):
+        self.tools[name] = func
+
+
+class _ProviderMgr:
+    def get_default_llm(self):
+        return None
+
+    def get_default_fast_llm(self):
+        return None
+
+    def get_default_embedding(self):
+        return None
+
+    def get_model_client(self, pid, mid):
+        return None
+
+    def get_provider(self, pid):
+        return None
+
+    def get_model_infos(self, pid):
+        return []
+
+    def get_model_info(self, pid, mid, mtype="llm"):
+        return None
+
+    def get_all_providers(self):
+        return {}
+
+
+class _Config(dict):
+    def get(self, key, default=None):
+        return dict.get(self, key, default)
+
+    def get_config(self, key, default=None):
+        return default
+
+
+class _FakeLLM:
+    """假生成模型：固定返回 12 页的 JSON，用来验证 max_pages 真的被裁剪。"""
+
+    calls = 0
+
+    def __init__(self, payload=None):
+        self.payload = payload
+
+    async def chat(self, req):
+        type(self).calls += 1
+        n = type(self).calls          # 每次调用给不同的页面名，避免覆盖导致计数失真
+        payload = self.payload or {
+            "summary": "# 摘要\n\n" + "内容" * 80,
+            "entities": [{"title": f"实体{n}-{i}", "content": "# 实体\n\n" + "字" * 80} for i in range(5)],
+            "concepts": [{"title": f"概念{n}-{i}", "content": "# 概念\n\n" + "字" * 80} for i in range(5)],
+            "analysis": "# 分析\n\n" + "析" * 80,
+        }
+        text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+
+        class R:
+            text_response = text
+
+        return R()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--framework", required=True, help="KiraAI 源码根目录")
+    ap.add_argument("--keep", action="store_true", help="保留临时数据目录")
+    args = ap.parse_args()
+
+    fw = Path(args.framework).resolve()
+    if not (fw / "core" / "plugin").is_dir():
+        print(f"✗ 不像 KiraAI 源码根：{fw}")
+        return 2
+
+    work = Path(tempfile.mkdtemp(prefix="kw-smoke-"))
+    data = work / "data"
+    for d in ("logs", "config", "plugins"):
+        (data / d).mkdir(parents=True, exist_ok=True)
+    os.chdir(fw)
+    sys.path.insert(0, str(fw))
+
+    from core.utils.path_utils import init_paths            # noqa: E402
+
+    init_paths(data_dir=str(data))
+
+    from fastapi import FastAPI                             # noqa: E402
+    from fastapi.testclient import TestClient               # noqa: E402
+
+    from core.plugin.plugin_context import PluginContext    # noqa: E402
+    try:
+        from core.plugin.plugin_registry import PluginManager, PLUGINS_DIR
+    except ModuleNotFoundError:                             # 3.0：模块被拆成 manager/registry
+        from core.plugin.manager import PluginManager, PLUGINS_DIR
+    from webui.routes.auth import require_auth              # noqa: E402
+
+    from core.config.default import VERSION                 # noqa: E402
+
+    print(f"· 框架 {fw.name} / {VERSION}")
+    print(f"· 插件 {PLUGIN_NAME} @ {PLUGIN_ROOT}")
+
+    dest = Path(PLUGINS_DIR) / PLUGIN_DIR_NAME
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(PLUGIN_ROOT, dest, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+
+    fields = {f.name for f in dataclasses.fields(PluginContext)}
+    kw = {n: None for n in fields}
+    if "provider_mgr" in fields:
+        kw["provider_mgr"] = _ProviderMgr()
+    if "tool_mgr" in fields:
+        kw["tool_mgr"] = _ToolMgr()
+    if "config" in fields:
+        kw["config"] = _Config()
+    ctx = PluginContext(**kw)
+
+    app = FastAPI()
+    mgr = PluginManager(ctx=ctx)
+    mgr.ctx = ctx
+    ctx.plugin_mgr = mgr
+    mgr.set_web_app(app)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    pid = loop.run_until_complete(mgr.load_plugin_from_dir(dest, auto_install=False))
+    inst = mgr.plugin_instances.get(PLUGIN_NAME)
+    app.dependency_overrides[require_auth] = lambda: "smoke"
+    client = TestClient(app)
+    base = f"/api/plugin/{PLUGIN_NAME}"
+
+    print("\n[1] 加载与注册")
+    check("插件加载成功", pid == PLUGIN_NAME, str(pid))
+    tools = ctx.tool_mgr.tools
+    for t in ("wiki_init", "wiki_write", "wiki_read", "wiki_delete",
+              "wiki_ingest", "wiki_query", "wiki_status"):
+        check(f"工具 {t}", t in tools)
+    page = f"/page/plugin/{PLUGIN_NAME}/index/"
+    check("页面路由已挂载", client.get(page).status_code in (200, 307, 401))
+    r = client.get(f"{base}/library")
+    check("/library 可达", r.status_code == 200, r.text[:120])
+
+    print("\n[2] 无库：只读接口 404，但 /library 必须 200 且给出自举信息")
+    r = client.get(f"{base}/library")
+    j = r.json()
+    check("/library 200", r.status_code == 200)
+    check("can_init=true", j.get("can_init") is True)
+    check("suggested_path 非空", bool(j.get("suggested_path")), str(j.get("suggested_path")))
+    check("默认路径不存在时 current=None", j.get("current") is None)
+    for ep in ("/tree", "/graph", "/lint", "/search?q=x"):
+        check(f"{ep} 404", client.get(f"{base}{ep}").status_code == 404)
+    check("只读探测没有创建目录", not Path(j["suggested_path"]).exists())
+
+    print("\n[3] 面板自举：POST /kb/init")
+    kb = work / "kb"
+    r = client.post(f"{base}/kb/init", json={"name": "smoke", "path": str(kb)})
+    check("/kb/init 200", r.status_code == 200, r.text[:200])
+    check("目录已建", (kb / "wiki" / "index.md").is_file())
+    for ep in ("/tree", "/graph", "/lint"):
+        check(f"{ep} 200", client.get(f"{base}{ep}").status_code == 200, ep)
+    check("registry 有该库", "smoke" in client.get(f"{base}/library").json()["registry"])
+
+    print("\n[4] bot 自己写 / 读 / 删（完全不调用生成模型）")
+    r = client.post(f"{base}/page", json={"rel": "entities/自己写.md", "content": "# 自己写\n\n" + "字" * 60})
+    check("面板写页 200", r.status_code == 200, r.text[:150])
+    out = loop.run_until_complete(tools["wiki_write"](event=None, rel="concepts/工具写.md",
+                                                      content="# 工具写\n\n[[自己写]] " + "字" * 60))
+    check("wiki_write 成功", "已写入" in out, out[:120])
+    out = loop.run_until_complete(tools["wiki_read"](event=None, rel="工具写"))
+    check("wiki_read 命中", "工具写" in out, out[:120])
+    out = loop.run_until_complete(tools["wiki_delete"](event=None, rel="concepts/工具写.md"))
+    check("wiki_delete 成功", "已删除" in out, out[:120])
+    check("文件真的没了", not (kb / "wiki" / "concepts" / "工具写.md").exists())
+    check("整个写/读/删过程一次都没碰生成模型", _FakeLLM.calls == 0, f"实际调用 {_FakeLLM.calls} 次")
+
+    print("\n[5] 生成模型不可用 ⇒ ingest 只存 raw 且明确指引（不静默失败）")
+    out = loop.run_until_complete(tools["wiki_ingest"](event=None, content="素材" * 60, title="无模型素材"))
+    check("提示改用 wiki_write", "wiki_write" in out, out[:160])
+    check("raw 已落地", (kb / "raw" / "无模型素材.md").is_file())
+
+    print("\n[6] 生成模型可用 + max_pages 真的生效")
+    inst.ctx.get_default_llm_client = lambda *a, **k: _FakeLLM()
+    inst.ctx.get_llm_client = lambda *a, **k: _FakeLLM()
+    def section_pages():
+        n = 0
+        for s in wc.SECTIONS:
+            n += len(list((kb / "wiki" / s).glob("*.md")))
+        return n
+
+    inst.max_pages = 3
+    before = section_pages()
+    out = loop.run_until_complete(tools["wiki_ingest"](event=None, content="素材" * 60, title="裁剪素材"))
+    delta = section_pages() - before
+    check("提示已达上限", "上限" in out, out[:160])
+    check("max_pages=3 ⇒ 恰好写 3 页", delta == 3, f"实际新增 {delta}")
+    # 反向：默认 15 时不应裁掉 12 页
+    inst.max_pages = 15
+    before = section_pages()
+    loop.run_until_complete(tools["wiki_ingest"](event=None, content="素材" * 60, title="不裁素材"))
+    delta = section_pages() - before
+    check("max_pages=15 ⇒ 12 页全写入", delta == 12, f"实际新增 {delta}")
+
+    print("\n[7] enabled=false 真的停用")
+    inst.enabled = False
+    out = loop.run_until_complete(tools["wiki_status"](event=None))
+    check("工具返回已停用", "已停用" in out, out[:120])
+    check("API 返回 409", client.get(f"{base}/tree").status_code == 409)
+    check("/library 仍 200（面板要能解释为什么）",
+          client.get(f"{base}/library").json().get("enabled") is False)
+    inst.enabled = True
+
+    print("\n[8] 接管已有 Obsidian 库（外部笔记进场，且只读操作不动它）")
+    vault = work / "vault"
+    (vault / "项目").mkdir(parents=True, exist_ok=True)
+    (vault / "我的笔记.md").write_text("# 我的笔记\n\n链接 [[计划]]\n", "utf-8")
+    (vault / "项目" / "计划.md").write_text("# 计划\n\n待办\n", "utf-8")
+    before = {p: p.read_text("utf-8") for p in vault.rglob("*.md")}
+    r = client.post(f"{base}/kb/init", json={"name": "vault", "path": str(vault)})
+    check("接管 200", r.status_code == 200, r.text[:150])
+    parsed = tool_load_tree(client, base, "vault")
+    rels = {p["rel"] for p in parsed["pages"]}
+    check("外部笔记出现在 tree", {"我的笔记.md", "项目/计划.md"} <= rels, str(sorted(rels)))
+    check("tree.sections 含 imported", "imported" in parsed["sections"], str(parsed["sections"]))
+    ext = [p for p in parsed["pages"] if p["origin"] == "vault"]
+    check("origin=vault 标记正确", len(ext) == 2, str(len(ext)))
+    for p, txt in before.items():
+        check(f"只读操作没有改动 {p.name}", p.read_text("utf-8") == txt)
+    r = client.get(f"{base}/page", params={"rel": "我的笔记.md", "kw_name": "vault", "origin": "vault"})
+    check("能读外部笔记", r.status_code == 200 and "我的笔记" in r.text, r.text[:120])
+    check("读页返回 section（面板分区标签要用）", r.json().get("section") == "imported", str(r.json().get("section")))
+    r = client.post(f"{base}/page", json={"kw": "vault", "rel": "我的笔记.md",
+                                          "content": "# 我的笔记\n\n改过了\n", "origin": "vault"})
+    check("能写外部笔记", r.status_code == 200, r.text[:150])
+    check("外部笔记真的改了", "改过了" in (vault / "我的笔记.md").read_text("utf-8"))
+    r = client.post(f"{base}/page", json={"kw": "vault", "rel": "../../escape.md", "content": "x"})
+    check("越界写入被拒", r.status_code == 400, r.text[:120])
+
+    print("\n[9] 检索 top_k / 空查询")
+    r = client.get(f"{base}/search", params={"q": "计划", "kw_name": "vault"})
+    check("search 200", r.status_code == 200)
+    check("空查询返回空命中", client.get(f"{base}/search", params={"q": " "}).json()["hits"] == [])
+    picked, meta = wc.rank_pages(Path(vault), "计划", top_k=1)
+    check("rank_pages 遵守 top_k", len(picked) <= 1, str(meta))
+
+    print("\n[10] 版本与清单")
+    sentinel = json.loads((PLUGIN_ROOT / "manifest.json").read_text("utf-8"))
+    check("manifest 版本 >= 1.2.0", tuple(int(x) for x in sentinel["version"].split(".")) >= (1, 2, 0),
+          sentinel["version"])
+    html = (PLUGIN_ROOT / "web" / "index.html").read_text("utf-8")
+    for asset in ("style.css", "graph.js", "app.js"):
+        check(f"{asset} 带版本查询串（防静态资源缓存）",
+              f'{asset}?v={sentinel["version"]}' in html,
+              f'需要 {asset}?v={sentinel["version"]}')
+
+    print(f"\n===== 结果：{len(PASS)} 通过 / {len(FAIL)} 失败 =====")
+    if FAIL:
+        for f in FAIL:
+            print("  × " + f)
+    if not args.keep:
+        shutil.rmtree(work, ignore_errors=True)
+    else:
+        print(f"（临时目录保留：{work}）")
+    return 1 if FAIL else 0
+
+
+def tool_load_tree(client, base, kw_name):
+    return client.get(f"{base}/tree", params={"kw_name": kw_name}).json()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

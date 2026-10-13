@@ -6,8 +6,18 @@
 (function (global) {
   "use strict";
 
+  /* 大图降级阈值：超过后改用「网格近似斥力 + 限量标签 + 关光晕」，
+     把每帧代价从 O(n²) 压到 O(n)，手机端 500+ 页也不至于卡死。 */
+  const BIG_NODES = 300;
+  const LABEL_LIMIT = 220;
+  const GLOW_LIMIT = 400;
+  /* 静止判定：每帧最大位移 < 1/4 像素、且持续 CALM_MS —— 视觉上已经不动了，停帧。 */
+  const CALM_PX = 0.25;
+  const CALM_MS = 700;
+
   const SECTION_COLOR = {
-    sources: "--src", entities: "--ent", concepts: "--con", analyses: "--ana", root: "--fg-faint"
+    sources: "--src", entities: "--ent", concepts: "--con", analyses: "--ana",
+    imported: "--ext", root: "--fg-faint"
   };
   const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
@@ -26,8 +36,17 @@
     this.reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     this._bind(); this.resize();
     this._tick = this._tick.bind(this);
+    this._running = true; this._idle = 0;
     this._loop = requestAnimationFrame(this._tick);
   }
+
+  /* 停帧后由任何交互唤醒（省电、省 CPU；不再无条件空转 rAF） */
+  Lattice.prototype._wake = function () {
+    this._calmSince = 0;
+    if (this._running) return;
+    this._running = true;
+    this._loop = requestAnimationFrame(this._tick);
+  };
 
   Lattice.prototype.resize = function () {
     const r = this.cv.getBoundingClientRect();
@@ -35,6 +54,7 @@
     this.cv.width = Math.floor(r.width * this.dpr);
     this.cv.height = Math.floor(r.height * this.dpr);
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this._wake();
   };
 
   /* 舞台矩形：晶格只在这个框里生长（默认整屏） */
@@ -82,6 +102,7 @@
     });
     this.nodes.forEach(n => { n.deg = deg.get(n.id) || 0; });
     this.zoomToFit();
+    this._wake();
     if (this.opts.onData) this.opts.onData({ nodes: this.nodes.length, links: this.links.length });
   };
 
@@ -146,6 +167,7 @@
         this.tx += e.movementX || 0; this.ty += e.movementY || 0;
       }
       cv.style.cursor = this.drag ? "grabbing" : (n ? "pointer" : "grab");
+      this._wake();
     });
     cv.addEventListener("mouseleave", () => { this.mouse.inside = false; this.hover = null; });
     cv.addEventListener("mousedown", (e) => {
@@ -154,6 +176,7 @@
       if (n) this.drag = { node: n, moved: false };
       else this.pan = true;
       cv.classList.add("grabbing");
+      this._wake();
     });
     window.addEventListener("mouseup", () => {
       if (this.drag) {
@@ -178,6 +201,7 @@
       const after = this.toWorld(mx, my);
       this.tx += (after.x - before.x) * this.zoom;
       this.ty += (after.y - before.y) * this.zoom;
+      this._wake();
     }, { passive: false });
     window.addEventListener("resize", () => this.resize());
   };
@@ -207,19 +231,49 @@
     const cx = stage.x + stage.w / 2, cy = stage.y + stage.h / 2;
     const rest = Math.max(78, Math.min(stage.w, stage.h) * 0.135);   // 弹簧自然长度随舞台放大
     const repel = 2600 + Math.min(stage.w, stage.h) * 3.2;
-    // 斥力（节点少时 O(n²) 足够，且更稳定）
-    for (let i = 0; i < N.length; i++) {
-      const a = N[i];
-      for (let j = i + 1; j < N.length; j++) {
-        const q = N[j];
-        let dx = q.x - a.x, dy = q.y - a.y;
-        let d2 = dx * dx + dy * dy;
-        if (!(d2 >= 1)) { dx = (Math.random() - .5) * 2; dy = (Math.random() - .5) * 2; d2 = 4; }
-        const d = Math.sqrt(d2);
-        const f = repel / d2;
-        const ux = dx / d, uy = dy / d;
-        a.vx -= ux * f; a.vy -= uy * f;
-        q.vx += ux * f; q.vy += uy * f;
+    // 斥力：小图精确 O(n²)；大图走网格质心近似（O(n·k)），代价可控
+    if (N.length > BIG_NODES) {
+      const cell = Math.max(48, rest);
+      const grid = new Map();
+      for (const n of N) {
+        const k = Math.floor(n.x / cell) + ":" + Math.floor(n.y / cell);
+        let b = grid.get(k);
+        if (!b) { b = { x: 0, y: 0, n: 0 }; grid.set(k, b); }
+        b.x += n.x; b.y += n.y; b.n += 1;
+      }
+      for (const b of grid.values()) { b.x /= b.n; b.y /= b.n; }
+      for (const n of N) {
+        const gx = Math.floor(n.x / cell), gy = Math.floor(n.y / cell);
+        const own = gx + ":" + gy;
+        for (let ox = -1; ox <= 1; ox++) {
+          for (let oy = -1; oy <= 1; oy++) {
+            const key = (gx + ox) + ":" + (gy + oy);
+            const b = grid.get(key);
+            if (!b) continue;
+            if (key === own && b.n === 1) continue;      // 自己那一格只有自己 ⇒ 跳过
+            let dx = b.x - n.x, dy = b.y - n.y;
+            let d2 = dx * dx + dy * dy;
+            if (!(d2 >= 1)) { dx = (Math.random() - .5) * 2; dy = (Math.random() - .5) * 2; d2 = 4; }
+            const d = Math.sqrt(d2);
+            const f = repel * b.n / d2;
+            n.vx -= (dx / d) * f; n.vy -= (dy / d) * f;
+          }
+        }
+      }
+    } else {
+      for (let i = 0; i < N.length; i++) {
+        const a = N[i];
+        for (let j = i + 1; j < N.length; j++) {
+          const q = N[j];
+          let dx = q.x - a.x, dy = q.y - a.y;
+          let d2 = dx * dx + dy * dy;
+          if (!(d2 >= 1)) { dx = (Math.random() - .5) * 2; dy = (Math.random() - .5) * 2; d2 = 4; }
+          const d = Math.sqrt(d2);
+          const f = repel / d2;
+          const ux = dx / d, uy = dy / d;
+          a.vx -= ux * f; a.vy -= uy * f;
+          q.vx += ux * f; q.vy += uy * f;
+        }
       }
     }
     // 弹簧（连线）
@@ -328,11 +382,14 @@
       const dim = (focusId && !active(n)) ? 0.18 : 1;
       const r = n.r * this.zoom * (0.6 + 0.4 * n.appear) * (isHot ? 1.5 : 1);
       c.globalAlpha = alpha * dim;
-      // 光晕
-      const g = c.createRadialGradient(s.x, s.y, 0, s.x, s.y, Math.max(6, r * 6));
-      g.addColorStop(0, col); g.addColorStop(1, "transparent");
-      c.fillStyle = g; c.globalAlpha = alpha * dim * (n.id === this.hover ? 0.34 : 0.14);
-      c.beginPath(); c.arc(s.x, s.y, Math.max(6, r * 6), 0, 6.2832); c.fill();
+      // 光晕（节点过多时只给热点画，省掉每帧的渐变对象）
+      const hot = n.id === this.hover || n.id === this.selected || isHot;
+      if (hot || this.nodes.length <= GLOW_LIMIT) {
+        const g = c.createRadialGradient(s.x, s.y, 0, s.x, s.y, Math.max(6, r * 6));
+        g.addColorStop(0, col); g.addColorStop(1, "transparent");
+        c.fillStyle = g; c.globalAlpha = alpha * dim * (n.id === this.hover ? 0.34 : 0.14);
+        c.beginPath(); c.arc(s.x, s.y, Math.max(6, r * 6), 0, 6.2832); c.fill();
+      }
       // 实体
       c.globalAlpha = alpha * dim;
       c.fillStyle = col;
@@ -342,8 +399,8 @@
         c.lineWidth = 1;
         c.beginPath(); c.arc(s.x, s.y, Math.max(6, r + 10 + (1 - (n.pulse || 0)) * 16), 0, 6.2832); c.stroke();
       }
-      // 标签：悬停 / 选中 / 高度数（带碰撞规避，避免叠字）
-      const showLabel = n.id === this.hover || n.id === this.selected || (n.deg >= 2 && this.zoom > 0.55);
+      // 标签：悬停 / 选中 / 搜索命中永远画；大图只画这些，避免几千次 measureText 拖死帧
+      const showLabel = hot || (this.nodes.length <= LABEL_LIMIT && n.deg >= 2 && this.zoom > 0.55);
       if (showLabel && this._labelFits(n, s)) {
         c.globalAlpha = alpha * (n.id === this.hover || n.id === this.selected ? 0.98 : 0.5);
         c.fillStyle = cssVar("--fg");
@@ -356,16 +413,47 @@
     c.globalAlpha = 1;
   };
 
+  /* 每帧最大位移（像素）—— 比速度更贴近「看起来有没有在动」 */
+  Lattice.prototype._drift = function () {
+    let m = 0;
+    for (const n of this.nodes) {
+      if (n._px !== undefined) {
+        const dx = Math.abs(n.x - n._px), dy = Math.abs(n.y - n._py);
+        if (dx > m) m = dx;
+        if (dy > m) m = dy;
+      }
+      n._px = n.x; n._py = n.y;
+    }
+    return m;
+  };
+
   Lattice.prototype._tick = function () {
     this._frames = (this._frames || 0) + 1;
     if (this._frames === 150 && !this._touched && this.nodes.length > 1) this.zoomToFit();
     if (!this.reduced) this._physics();
     else if (!this._laid) { for (let i = 0; i < 260; i++) this._physics(); this._laid = true; }
     this._draw();
+
+    // 布局静止 ⇒ 停帧（不空转 CPU/电）；任何交互或数据变化都会 _wake() 重新起跳
+    const busy = this.drag || this.pan || this.mouse.inside ||
+      this.nodes.some(n => n.appear < 1 || n.pulse || (n.alpha !== undefined && n.alpha < 0.99));
+    const drift = this._drift();
+    this._lastDrift = drift;
+    this._lastBusy = busy;
+    const now = performance.now();
+    if (!busy && this._frames > 12 && drift < CALM_PX) {
+      if (!this._calmSince) this._calmSince = now;
+      if (now - this._calmSince > CALM_MS) { this._running = false; return; }
+    } else {
+      this._calmSince = 0;
+    }
     this._loop = requestAnimationFrame(this._tick);
   };
 
-  Lattice.prototype.destroy = function () { cancelAnimationFrame(this._loop); };
+  Lattice.prototype.destroy = function () {
+    this._running = false;
+    cancelAnimationFrame(this._loop);
+  };
 
   global.Lattice = Lattice;
 })(window);
