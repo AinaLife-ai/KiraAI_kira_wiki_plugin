@@ -11,7 +11,7 @@
 ## 兼容性
 
 支持 KiraAI 2.33.1+ 与 3.0 全系列（含 v3.0.0-rc.1 / rc.2；特征识别，不绑版本号）。
-两代都做过**真框架端到端冒烟**：`python tools/panel_smoke.py --framework <KiraAI 源码根>`（53 项断言，全绿）。
+两代都做过**真框架端到端冒烟**：`python tools/panel_smoke.py --framework <KiraAI 源码根>`（61 项断言，全绿）。
 **v1.1.1 起 `model` 是下拉选择**（`model_select`，走框架的模型配置）：在插件设置里直接选，不用手抄任何 ID。
 历史配置里手填的「服务商:模型名」仍然可用 —— 插件启动时会自动解析并**迁移成下拉值**（迁移结果回写配置文件，
 下拉框立即正确回显）；解析不出来时告警并回退默认 LLM，不会静默失效。
@@ -66,21 +66,19 @@
 
 ## ✨ 它能干什么
 
-AI 通过 7 个工具操作知识库。**其中 4 个完全不调用模型**——bot 自己就能建库、写页、改页、删页：
+AI 通过 **4 个工具**操作知识库。**其中 2 个完全不调用模型**——bot 自己就能建库、写页、改页、删页：
 
 | 工具 | 调模型？ | 作用 |
 | --- | --- | --- |
-| `wiki_init` | 否 | 建库 / 接管目录（`path` 可省略，留空用默认路径）；指向已有 vault 时笔记一并载入 |
-| `wiki_write` | **否** | **直接写/新建页面**（`mode=replace / append`），内容由 bot 自己写；生成区与自己的笔记区都能写 |
-| `wiki_read` | **否** | 读页面完整正文（按相对路径或标题）——改页面前先读原文，避免覆盖已有内容 |
-| `wiki_delete` | **否** | 删除页面（核心页 `index/overview/log/conventions` 受保护） |
-| `wiki_ingest` | 是 | 收录素材进 `raw/`，并让生成模型自动编译摘要/实体/概念/分析页；**模型不可用时只存 raw 并明确提示改用 `wiki_write`** |
+| `wiki_write` | **否** | `mode=replace` 整页写入 / `append` 追加 / `delete` 删页 / `init` 建库或接管目录（`path` 可省略）。生成区与**你自己的笔记区都能写**；核心页 `index/overview/log/conventions` 受保护 |
+| `wiki_read` | **否** | 给 `ref` 读该页完整正文；不给 `ref` 列出全部分区与统计，`check=true` 顺带体检（空页 / 断链 / 孤立页）。改页前先读原文 |
+| `wiki_ingest` | 是 | 收录素材进 `raw/`，并让生成模型编译摘要/实体/概念/分析页；**模型不可用时只存 raw 并明确提示改用 `wiki_write`** |
 | `wiki_query` | 是 | 检索问答（标注来源）；模型不可用时退化为返回原文片段 |
-| `wiki_status` | 否 | 状态与体检：默认列概览；`check=true` 出完整体检（空页 / 断链 / 孤立页） |
 
 > 生成模型只是**增强**，不是前置条件：没配模型时，bot 依旧能自己写出一整本知识库。
-> 工具 schema 每轮请求都会注入，所以描述保持紧凑；插件**不注入任何系统提示词**，不破坏 prompt 前缀缓存。
-> `wiki_list` / `wiki_lint` 已并入 `wiki_status`（语义重叠，少一个工具就少一份常驻 token）。
+> 工具 schema 每轮请求都会注入，所以刻意压到 4 个、描述保持紧凑
+> （v1.3.0 由 7 个合并而来，注入体量 **−32%**，`tools/panel_smoke.py` 里有断言守着它不再反弹）；
+> 插件**不注入任何系统提示词**，不破坏 prompt 前缀缓存。
 
 ## 🗂️ 目录结构
 
@@ -108,7 +106,7 @@ data/kw/                  # 默认知识库（可在配置里改路径）
 2. **零配置即可用**：侧边栏点「知识库」→ 面板给出默认目录（`data/kw`）→ 点一次
    **「创建 / 接管这个目录」** 就建好了。**也可以直接把它指向你已有的 Obsidian 库**：
    里面的笔记会被一并载入晶格与检索，可读可写，插件不会擅自改动它们。
-3. 对 bot 说：**「建个知识库」**（`wiki_init` 的 `path` 已可选，留空即用默认路径）
+3. 对 bot 说：**「建个知识库」**（`wiki_write mode=init`，`path` 可留空，用默认路径）
 4. 让 bot 自己写：**「把这个记进知识库：……」**——bot 会直接用 `wiki_write` 落笔，
    **不调用任何额外模型**；想要自动编译成摘要/实体/概念页时再用 `wiki_ingest`
 5. 用 Obsidian 打开知识库目录，看图谱、看双链，完事；面板里也能读、能改、能问答
@@ -155,7 +153,7 @@ LLM 生成失败也不慌，素材已经躺在 `raw/` 里了，不会丢。
 
 ```bash
 python tests/test_wiki_core.py                                   # 服务层单测（纯标准库，23 条）
-python tools/panel_smoke.py --framework /path/to/KiraAI          # 真框架端到端冒烟（53 条，2.x / 3.0 通用）
+python tools/panel_smoke.py --framework /path/to/KiraAI          # 真框架端到端冒烟（61 条，2.x / 3.0 通用）
 ```
 
 `panel_smoke.py` 会把插件装进你本地的 KiraAI 源码，起真 FastAPI 路由并断言：
@@ -165,13 +163,21 @@ python tools/panel_smoke.py --framework /path/to/KiraAI          # 真框架端�
 ## 📝 更新日志
 
 <details open>
-<summary>展开查看更新日志（当前版本：v1.2.0）</summary>
+<summary>展开查看更新日志（当前版本：v1.3.0）</summary>
 
+### v1.3.0 —— 工具 7 → 4，注入体量 −32%
+- 🧩 **合并工具**（每轮请求都会注入 schema，少一个就省一份常驻 token）：
+  · `wiki_init` + `wiki_write` + `wiki_delete` → **`wiki_write`**（`mode = replace / append / delete / init`）
+  · `wiki_status` → **`wiki_read`**（不给 `ref` 即列目录+统计，`check=true` 顺带体检）
+  · `wiki_ingest` / `wiki_query` 保持独立（都依赖生成模型，语义清晰）
+- 📉 注入体量实测：**7 个工具 2338 字符 → 4 个工具 1585 字符（−32%）**；
+  `tools/panel_smoke.py` 新增「工具数必须是 4」「schema 总量不得超过预算」两条断言，防止悄悄反弹。
+- 行为不变：合并后的 `wiki_write` / `wiki_read` 与原工具的返回文案、错误处理、权限边界完全一致。
 ### v1.2.0 —— 修掉「面板打不开 / 按钮没反应 / 配置项说谎」
 - 🚑 **无库不再死锁**：以前没建库时 `/tree|/graph|/lint|/search|/rebuild` 全 404，
   面板用 `Promise.all` 一把抓 ⇒ 整屏「读不到知识库」，而且**没有任何建库入口**。
   现在 `/library` 永远 200 并给出 `can_init` / `suggested_path`，面板渲染「创建 / 接管」引导卡，
-  新增 `POST /kb/init` 一键建库；`wiki_init` 的 `path` 也改成可选（留空用默认 `data/kw`）。
+  新增 `POST /kb/init` 一键建库；建库工具的 `path` 也改成可选（留空用默认 `data/kw`）。
 - 🚑 **两个按钮在真 WebUI 里必然没反应**（「新建页面」「删除页面」）：
   KiraAI 插件页 iframe 的 sandbox 缺 `allow-modals`，浏览器静默吞掉原生 `prompt/confirm`。
   现在全部换成**页内自绘 modal**（A/B 实测：同页面沙箱内原生弹窗 0 次触发，页内 modal 正常）。
@@ -179,8 +185,8 @@ python tools/panel_smoke.py --framework /path/to/KiraAI          # 真框架端�
   `max_pages_per_ingest` 也从未生效（设 2 仍生成 12 页）。现在都真正生效并纳入冒烟断言。
 - ✅ **直接接管已有 Obsidian 库**：知识库根与任意子目录下的 `.md` 都会进图谱与检索，
   标为「外部笔记」分区、单独配色，可读可写；插件只动 `wiki/`、`raw/`，**绝不碰你原有的笔记**。
-- ✅ **bot 能自己写，不依赖额外模型**：新增 `wiki_write` / `wiki_read` / `wiki_delete`
-  （全程零模型调用）；`wiki_ingest` 的生成模型不可用时只存 `raw/` 并明确提示改用 `wiki_write`。
+- ✅ **bot 能自己写，不依赖额外模型**：新增 `wiki_write`（replace / append / delete / init）
+  与 `wiki_read`（全程零模型调用）；`wiki_ingest` 的生成模型不可用时只存 `raw/` 并明确提示改用 `wiki_write`。
 - ✅ **只读操作绝不落盘**：扫库/体检/看图不会再在你指向的目录里偷偷建 `raw/`、`wiki/`。
 - ✅ **多库切换器**：顶栏下拉切换知识库（此前 `state.kw` 恒为空、永远只显示第一个库）。
 - ✅ **不再「转圈不动」**：前端每个请求 20s 超时 + 失败降级（library 单独取，tree/graph 失败不炸整屏）；
