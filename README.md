@@ -211,7 +211,11 @@ python tools/panel_smoke.py --framework /path/to/KiraAI          # 真框架端�
 ## 📝 更新日志
 
 <details open>
-<summary>展开查看更新日志（当前版本：v1.5.0）</summary>
+<summary>展开查看更新日志（当前版本：v1.5.1）</summary>
+
+### v1.5.1
+
+  - 测试桩韧性：panel_smoke 的框架方法桩补 `**_`（框架加参数不再 TypeError）。无产品代码变更。
 
 ### v1.5.0 —— 设置搬进面板 / 模型下拉 / LLM 勾选
 - ⚙️ **设置搬进面板**（右上齿轮，按 `S`）：启用开关、默认知识库目录、生成模型、单次收录页数。
