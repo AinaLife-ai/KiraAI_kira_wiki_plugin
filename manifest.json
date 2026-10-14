@@ -1,7 +1,7 @@
 {
   "plugin_id": "KiraAI_kira_wiki_plugin",
   "display_name": "Kira Wiki",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "author": "ainali & znq19",
   "description": "把零碎素材编译成一本会自己生长的 Obsidian 知识库：raw 收录 + 自动生成 wiki 页面、实体、概念与交叉引用；内置知识晶格面板（图谱 / 阅读 / 热编辑 / 体检 / 问答）。可直接接管已有 Obsidian 库，且 bot 能自己建库、写页、改页（不依赖额外模型）。",
   "repo": "https://github.com/AinaLife-ai/KiraAI_kira_wiki_plugin",

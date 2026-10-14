@@ -55,7 +55,7 @@ class _ProviderMgr:
     def get_default_embedding(self):
         return None
 
-    def get_model_client(self, pid, mid):
+    def get_model_client(self, pid, mid, **_):
         return None
 
     def get_provider(self, pid):
@@ -87,7 +87,7 @@ class _FakeLLM:
     def __init__(self, payload=None):
         self.payload = payload
 
-    async def chat(self, req):
+    async def chat(self, req, **_):
         type(self).calls += 1
         n = type(self).calls          # 每次调用给不同的页面名，避免覆盖导致计数失真
         payload = self.payload or {
